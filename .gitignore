@@ -1,0 +1,29 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when run with the -o flag
+*.out
+
+# Dependency directories (though Go modules largely obviates the need for this)
+vendor/
+
+# Environment file
+.env
+
+# Project-specific binary name
+discord-bot
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
