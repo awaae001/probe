@@ -16,6 +16,7 @@ vendor/
 
 # Environment file
 .env
+*.json
 
 # Project-specific binary name
 discord-bot
@@ -27,3 +28,9 @@ discord-bot
 # OS-generated files
 .DS_Store
 Thumbs.db
+
+# other
+todo.md
+
+# data
+data/

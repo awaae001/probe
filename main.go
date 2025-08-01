@@ -1,41 +1,23 @@
 package main
 
 import (
+	"discord-bot/config"
+	"discord-bot/scanner"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/joho/godotenv"
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
 )
 
 func main() {
-	// 从 .env 文件加载环境变量
-	err := godotenv.Load()
-	if err != nil {
-		fmt.Println("Error loading .env file")
-	}
-
-	// 初始化 Viper
-	viper.SetConfigName("config") // 配置文件名 (不带扩展名)
-	viper.SetConfigType("yml")    // 配置文件类型
-	viper.AddConfigPath(".")      // 查找配置文件的路径
-	viper.AutomaticEnv()          // 自动从环境变量读取
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-
-	// 读取配置文件
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// 配置文件未找到；可以忽略
-			fmt.Println("Config file not found, using environment variables and defaults.")
-		} else {
-			// 找到配置文件但解析时发生错误
-			panic(fmt.Errorf("fatal error config file: %w", err))
-		}
-	}
+	// Load configuration
+	config.LoadConfig()
 
 	// 从 Viper 获取 Bot Token
 	token := viper.GetString("BOT_TOKEN")
@@ -55,7 +37,7 @@ func main() {
 	dg.AddHandler(messageCreate)
 
 	// 设置 intents
-	dg.Identify.Intents = discordgo.IntentsGuildMessages
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
 
 	// 打开一个 websocket 连接到 Discord 并开始监听
 	err = dg.Open()
@@ -64,13 +46,32 @@ func main() {
 		return
 	}
 
+	// 设置定时任务
+	c := cron.New()
+	_, err = c.AddFunc("@hourly", func() {
+		log.Println("Running hourly scan...")
+		scanner.StartScanning(dg)
+	})
+	if err != nil {
+		log.Fatalf("Could not set up cron job: %v", err)
+	}
+	c.Start()
+	log.Println("Cron job scheduled to run hourly.")
+
+	// 第一次启动时立即执行一次扫描
+	go func() {
+		log.Println("Performing initial scan...")
+		scanner.StartScanning(dg)
+	}()
+
 	// 等待终止信号
 	fmt.Println("Bot is now running. Press CTRL-C to exit.")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
 
-	// 优雅地关闭 discord session
+	// 优雅地关闭 discord session 和定时任务
+	c.Stop()
 	dg.Close()
 }
 
