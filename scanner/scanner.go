@@ -280,8 +280,9 @@ func processThreadsChunk(s *discordgo.Session, chunk models.ThreadChunk, existin
 		}
 
 		content := firstMessage.Content
-		if len(content) > 512 {
-			content = content[:512]
+		runes := []rune(content)
+		if len(runes) > 512 {
+			content = string(runes[:512])
 		}
 
 		var coverImageURL string
