@@ -58,7 +58,9 @@ func CreateTableForChannel(db *sql.DB, tableName string) error {
 	       tags TEXT,
 	       message_count INTEGER,
 	       timestamp INTEGER,
-	       cover_image_url TEXT
+	       cover_image_url TEXT,
+	       total_reactions INTEGER,
+	       unique_reactions INTEGER
 	   );`, tableName)
 
 	_, err := db.Exec(query)
@@ -74,8 +76,8 @@ func CreateTableForChannel(db *sql.DB, tableName string) error {
 func InsertPost(db *sql.DB, post models.Post, tableName string) error {
 	query := fmt.Sprintf(`
     INSERT OR IGNORE INTO %s (
-        thread_id, channel_id, title, author, author_id, content, tags, message_count, timestamp, cover_image_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, tableName)
+        thread_id, channel_id, title, author, author_id, content, tags, message_count, timestamp, cover_image_url, total_reactions, unique_reactions
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, tableName)
 
 	stmt, err := db.Prepare(query)
 	if err != nil {
@@ -94,6 +96,8 @@ func InsertPost(db *sql.DB, post models.Post, tableName string) error {
 		post.MessageCount,
 		post.Timestamp,
 		post.CoverImageURL,
+		post.TotalReactions,
+		post.UniqueReactions,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to execute statement for saving post %s: %w", post.ThreadID, err)

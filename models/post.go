@@ -2,17 +2,19 @@ package models
 
 // Post represents a unified forum post structure for the database.
 type Post struct {
-	DBID          int64  `db:"db_id"`
-	ThreadID      string `db:"thread_id"` // Unique
-	ChannelID     string `db:"channel_id"`
-	Title         string `db:"title"`
-	Author        string `db:"author"`
-	AuthorID      string `db:"author_id"`
-	Content       string `db:"content"`
-	Tags          string `db:"tags"`
-	MessageCount  int    `db:"message_count"`
-	Timestamp     int64  `db:"timestamp"` // Unix timestamp (CreationDate)
-	CoverImageURL string `db:"cover_image_url"`
+	DBID            int64  `db:"db_id"`
+	ThreadID        string `db:"thread_id"` // Unique
+	ChannelID       string `db:"channel_id"`
+	Title           string `db:"title"`
+	Author          string `db:"author"`
+	AuthorID        string `db:"author_id"`
+	Content         string `db:"content"`
+	Tags            string `db:"tags"`
+	MessageCount    int    `db:"message_count"`
+	Timestamp       int64  `db:"timestamp"` // Unix timestamp (CreationDate)
+	CoverImageURL   string `db:"cover_image_url"`
+	TotalReactions  int    `db:"total_reactions"`
+	UniqueReactions int    `db:"unique_reactions"`
 }
 
 // Exclusion represents a thread that should be excluded from scanning.

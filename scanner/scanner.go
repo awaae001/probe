@@ -290,17 +290,35 @@ func processThreadsChunk(s *discordgo.Session, chunk models.ThreadChunk, existin
 			coverImageURL = firstMessage.Attachments[0].URL
 		}
 
+		totalReactions := 0
+		uniqueUserIDs := make(map[string]struct{})
+
+		for _, reaction := range firstMessage.Reactions {
+			totalReactions += reaction.Count
+			users, err := s.MessageReactions(thread.ID, firstMessage.ID, reaction.Emoji.APIName(), 100, "", "")
+			if err != nil {
+				log.Printf("Error getting users for reaction %s on message %s: %v", reaction.Emoji.APIName(), firstMessage.ID, err)
+				continue
+			}
+			for _, user := range users {
+				uniqueUserIDs[user.ID] = struct{}{}
+			}
+		}
+		uniqueReactions := len(uniqueUserIDs)
+
 		post := models.Post{
-			ThreadID:      thread.ID,
-			ChannelID:     thread.ParentID,
-			Title:         thread.Name,
-			Author:        firstMessage.Author.Username,
-			AuthorID:      firstMessage.Author.ID,
-			Content:       content,
-			Tags:          strings.Join(tagNames, ","),
-			MessageCount:  thread.MessageCount,
-			Timestamp:     firstMessage.Timestamp.Unix(),
-			CoverImageURL: coverImageURL,
+			ThreadID:        thread.ID,
+			ChannelID:       thread.ParentID,
+			Title:           thread.Name,
+			Author:          firstMessage.Author.Username,
+			AuthorID:        firstMessage.Author.ID,
+			Content:         content,
+			Tags:            strings.Join(tagNames, ","),
+			MessageCount:    thread.MessageCount,
+			Timestamp:       firstMessage.Timestamp.Unix(),
+			CoverImageURL:   coverImageURL,
+			TotalReactions:  totalReactions,
+			UniqueReactions: uniqueReactions,
 		}
 
 		if err := database.InsertPost(task.DB, post, tableName); err != nil {
