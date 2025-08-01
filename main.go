@@ -50,7 +50,7 @@ func main() {
 	c := cron.New()
 	_, err = c.AddFunc("@hourly", func() {
 		log.Println("Running hourly scan...")
-		scanner.StartScanning(dg)
+		scanner.StartScanning(dg, false) // Incremental scan
 	})
 	if err != nil {
 		log.Fatalf("Could not set up cron job: %v", err)
@@ -61,7 +61,7 @@ func main() {
 	// 第一次启动时立即执行一次扫描
 	go func() {
 		log.Println("Performing initial scan...")
-		scanner.StartScanning(dg)
+		scanner.StartScanning(dg, true) // Full scan
 	}()
 
 	// 等待终止信号

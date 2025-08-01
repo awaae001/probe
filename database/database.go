@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3" // Import the SQLite3 driver
 )
@@ -34,71 +35,140 @@ func InitDB(dbPath string) error {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
+	// Create the exclusions table if it doesn't exist
+	if err := createExclusionsTable(DB); err != nil {
+		return fmt.Errorf("failed to create exclusions table: %w", err)
+	}
+
 	log.Println("Successfully connected to the database at", dbPath)
 	return nil
 }
 
 // CreateTableForChannel creates a new table for a specific forum channel if it doesn't already exist.
-// The table name is sanitized to be a valid SQL table name.
-func CreateTableForChannel(channelID string) error {
-	// Basic sanitization for table name
-	tableName := "channel_" + channelID
-
+func CreateTableForChannel(db *sql.DB, tableName string) error {
 	query := fmt.Sprintf(`
-    CREATE TABLE IF NOT EXISTS %s (
-        author_id TEXT,
-        thread_id TEXT PRIMARY KEY,
-        title TEXT,
-        content TEXT,
-        first_image_url TEXT,
-        message_count INTEGER,
-        creation_date INTEGER,
-        last_message_time INTEGER,
-        tag_id TEXT,
-        channel_id TEXT
-    );`, tableName)
+	   CREATE TABLE IF NOT EXISTS %s (
+	       db_id INTEGER PRIMARY KEY AUTOINCREMENT,
+	       thread_id TEXT UNIQUE,
+	       channel_id TEXT,
+	       title TEXT,
+	       author TEXT,
+	       author_id TEXT,
+	       content TEXT,
+	       tags TEXT,
+	       message_count INTEGER,
+	       timestamp INTEGER,
+	       cover_image_url TEXT
+	   );`, tableName)
 
-	_, err := DB.Exec(query)
+	_, err := db.Exec(query)
 	if err != nil {
-		return fmt.Errorf("failed to create table for channel %s: %w", channelID, err)
+		return fmt.Errorf("failed to create table %s: %w", tableName, err)
 	}
 
 	log.Printf("Table %s ensured to exist.", tableName)
 	return nil
 }
 
-// SavePost saves a single forum post to the appropriate channel's table.
-// It uses an "INSERT OR REPLACE" statement to handle both new posts and updates.
-func SavePost(post models.ForumPost) error {
-	tableName := "channel_" + post.ChannelID
-
+// InsertPost saves a single forum post to the appropriate channel's table.
+func InsertPost(db *sql.DB, post models.Post, tableName string) error {
 	query := fmt.Sprintf(`
-    INSERT OR REPLACE INTO %s (
-        author_id, thread_id, title, content, first_image_url, 
-        message_count, creation_date, last_message_time, tag_id, channel_id
+    INSERT OR IGNORE INTO %s (
+        thread_id, channel_id, title, author, author_id, content, tags, message_count, timestamp, cover_image_url
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, tableName)
 
-	stmt, err := DB.Prepare(query)
+	stmt, err := db.Prepare(query)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement for saving post: %w", err)
 	}
 	defer stmt.Close()
 
 	_, err = stmt.Exec(
-		post.AuthorID,
 		post.ThreadID,
-		post.Title,
-		post.Content,
-		post.FirstImageURL,
-		post.MessageCount,
-		post.CreationDate,
-		post.LastMessageTime,
-		post.TagID,
 		post.ChannelID,
+		post.Title,
+		post.Author,
+		post.AuthorID,
+		post.Content,
+		post.Tags,
+		post.MessageCount,
+		post.Timestamp,
+		post.CoverImageURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to execute statement for saving post %s: %w", post.ThreadID, err)
 	}
 
 	return nil
+}
+
+// GetAllPostIDs retrieves all post IDs from a given table and returns them as a map for quick lookups.
+func GetAllPostIDs(db *sql.DB, tableName string) (map[string]bool, error) {
+	rows, err := db.Query(fmt.Sprintf("SELECT thread_id FROM %s", tableName))
+	if err != nil {
+		// If the table doesn't exist, return an empty map instead of an error.
+		if err.Error() == fmt.Sprintf("no such table: %s", tableName) {
+			return make(map[string]bool), nil
+		}
+		return nil, fmt.Errorf("failed to query post IDs from table %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	postIDs := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan post ID: %w", err)
+		}
+		postIDs[id] = true
+	}
+
+	return postIDs, nil
+}
+
+// createExclusionsTable creates the 'exclusions' table if it doesn't exist.
+func createExclusionsTable(db *sql.DB) error {
+	query := `
+    CREATE TABLE IF NOT EXISTS exclusions (
+        thread_id TEXT PRIMARY KEY,
+        guild_id TEXT,
+        channel_id TEXT,
+        reason TEXT,
+        timestamp INTEGER
+    );`
+	_, err := db.Exec(query)
+	return err
+}
+
+// AddThreadToExclusionList adds a thread to the exclusion list.
+func AddThreadToExclusionList(db *sql.DB, guildID, channelID, threadID, reason string) error {
+	query := `INSERT OR REPLACE INTO exclusions (thread_id, guild_id, channel_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(threadID, guildID, channelID, reason, time.Now().Unix())
+	return err
+}
+
+// GetExcludedThreads returns a map of excluded thread IDs for a specific guild and channel.
+func GetExcludedThreads(db *sql.DB, guildID, channelID string) (map[string]bool, error) {
+	query := "SELECT thread_id FROM exclusions WHERE guild_id = ? AND channel_id = ?"
+	rows, err := db.Query(query, guildID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	excluded := make(map[string]bool)
+	for rows.Next() {
+		var threadID string
+		if err := rows.Scan(&threadID); err != nil {
+			return nil, err
+		}
+		excluded[threadID] = true
+	}
+	return excluded, nil
 }

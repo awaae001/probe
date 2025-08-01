@@ -9,8 +9,6 @@ require (
 	github.com/spf13/viper v1.20.1
 )
 
-require github.com/mitchellh/mapstructure v1.5.0
-
 require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
