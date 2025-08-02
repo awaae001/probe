@@ -1,7 +1,17 @@
 bot:
   prefix: "!"
-  ScanAtStartup: false
+  scan_on_startup: false
+  adminChanneId: 
+  commands:
+    clear_on_startup: true
 
 commands:
   allowguils:
     - 1369594465383219293
+  auth:
+    Developers:
+      - 1398101714179063949
+    AdminsRoles:
+      - 1371272565926002758
+    Guest:
+      - 0

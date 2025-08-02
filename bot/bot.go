@@ -7,23 +7,16 @@ import (
 	"os/signal"
 	"syscall"
 
+	"discord-bot/command"
 	"discord-bot/config"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/spf13/viper"
 )
 
-// Command defines the interface for a bot command.
-type Command interface {
-	Definition() *discordgo.ApplicationCommand
-	Handler(s *discordgo.Session, i *discordgo.InteractionCreate)
-	MessageHandler(s *discordgo.Session, m *discordgo.MessageCreate)
-}
-
 // Bot encapsulates the bot's state.
 type Bot struct {
-	Session  *discordgo.Session
-	Commands map[string]Command
+	Session *discordgo.Session
 }
 
 // NewBot creates and initializes a new Bot instance.
@@ -42,16 +35,8 @@ func NewBot() (*Bot, error) {
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessageReactions
 
 	return &Bot{
-		Session:  dg,
-		Commands: make(map[string]Command),
+		Session: dg,
 	}, nil
-}
-
-// RegisterCommands registers the provided commands.
-func (b *Bot) RegisterCommands(commands []Command) {
-	for _, cmd := range commands {
-		b.Commands[cmd.Definition().Name] = cmd
-	}
 }
 
 // Start opens the bot's session and registers handlers.
@@ -64,12 +49,53 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 	}
 
 	// Register slash commands
-	for _, cmd := range b.Commands {
-		_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, "", cmd.Definition())
+	commandDefs := command.GetCommandDefinitions()
+	guildIDs := viper.GetStringSlice("commands.allowguils")
+
+	if viper.GetBool("bot.commands.clear_on_startup") {
+		log.Println("Clearing existing commands...")
+		// Clear global commands
+		existingCommands, err := b.Session.ApplicationCommands(b.Session.State.User.ID, "")
 		if err != nil {
-			log.Printf("Cannot create '%v' command: %v", cmd.Definition().Name, err)
+			log.Printf("Could not fetch global commands: %v", err)
+		} else {
+			for _, cmd := range existingCommands {
+				err := b.Session.ApplicationCommandDelete(b.Session.State.User.ID, "", cmd.ID)
+				if err != nil {
+					log.Printf("Cannot delete global command '%v': %v", cmd.Name, err)
+				}
+			}
+		}
+
+		// Clear commands in specified guilds
+		for _, guildID := range guildIDs {
+			existingCommands, err := b.Session.ApplicationCommands(b.Session.State.User.ID, guildID)
+			if err != nil {
+				log.Printf("Could not fetch commands for guild %s: %v", guildID, err)
+				continue
+			}
+			for _, cmd := range existingCommands {
+				err := b.Session.ApplicationCommandDelete(b.Session.State.User.ID, guildID, cmd.ID)
+				if err != nil {
+					log.Printf("Cannot delete command '%v' in guild %s: %v", cmd.Name, guildID, err)
+				}
+			}
+		}
+		log.Println("Finished clearing commands.")
+	}
+
+	log.Println("Registering commands...")
+	for _, guildID := range guildIDs {
+		for _, cmdDef := range commandDefs {
+			_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, guildID, cmdDef)
+			if err != nil {
+				log.Printf("Cannot create '%v' command in guild %s: %v", cmdDef.Name, guildID, err)
+			} else {
+				log.Printf("Successfully created '%v' command in guild %s.", cmdDef.Name, guildID)
+			}
 		}
 	}
+	log.Println("Finished registering commands.")
 
 	startScheduler(b.Session)
 
@@ -87,13 +113,11 @@ func (b *Bot) Stop() {
 }
 
 // Run is the main entry point for the bot application.
-func Run(registerHandlers func(*Bot), commands []Command) {
+func Run(registerHandlers func(*Bot)) {
 	bot, err := NewBot()
 	if err != nil {
 		log.Fatalf("Error initializing bot: %v", err)
 	}
-
-	bot.RegisterCommands(commands)
 
 	if err := bot.Start(registerHandlers); err != nil {
 		log.Fatalf("Error starting bot: %v", err)

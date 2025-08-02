@@ -28,3 +28,16 @@ type GuildThreadConfig struct {
 	Database  string `json:"database" mapstructure:"database"`
 	TableName string `json:"tableName" mapstructure:"tableName"`
 }
+
+// CommandsConfig represents the commands configuration.
+type CommandsConfig struct {
+	AllowGuils []string   `mapstructure:"allowguils"`
+	Auth       AuthConfig `mapstructure:"auth"`
+}
+
+// AuthConfig represents the authentication settings.
+type AuthConfig struct {
+	Developers  []string `mapstructure:"Developers"`
+	AdminsRoles []string `mapstructure:"AdminsRoles"`
+	Guest       []string `mapstructure:"Guest"`
+}

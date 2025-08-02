@@ -11,21 +11,14 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/spf13/viper"
 )
 
 const maxPartitionConcurrency = 45          // 每个服务器内最大并发分区扫描数
 const maxThreadConcurrencyPerPartition = 24 // 每个分区内最大并发线程处理数
 
 // StartScanning initiates the concurrent scanning process.
-func StartScanning(s *discordgo.Session, isFullScan bool) {
+func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, isFullScan bool) {
 	log.Println("Starting the scanning process...")
-
-	var scanningConfig models.ScanningConfig
-	if err := viper.Unmarshal(&scanningConfig); err != nil {
-		log.Printf("Error unmarshalling scanning config: %v", err)
-		return
-	}
 
 	if len(scanningConfig) == 0 {
 		log.Println("No valid guild configurations found.")

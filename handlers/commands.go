@@ -1,43 +1,56 @@
 package handlers
 
 import (
-	"strings"
+	"discord-bot/utils"
+	"log"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/spf13/viper"
 )
 
-// PingCommand is a simple command that replies with "Pong!".
-type PingCommand struct{}
-
-func (p *PingCommand) Definition() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "ping",
-		Description: "Ping the bot",
-	}
-}
-
-func (p *PingCommand) Handler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Pong!",
-		},
-	})
-}
-
-func (p *PingCommand) MessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
-	prefix := viper.GetString("bot.prefix")
-	if prefix == "" {
-		prefix = "!" // Default prefix
+// CommandDispatcher is the central handler for all application command interactions.
+// It performs permission checks and then dispatches the interaction to the appropriate handler.
+func CommandDispatcher(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	auth, err := utils.NewAuth()
+	if err != nil {
+		log.Printf("Failed to create auth instance: %v", err)
+		// Handle error appropriately
+		return
 	}
 
-	if strings.HasPrefix(m.Content, prefix+p.Definition().Name) {
-		s.ChannelMessageSend(m.ChannelID, "Pong!")
+	commandPermissions := map[string]string{
+		"start_scan": "admin",
+		"ping":       "guest",
 	}
-}
 
-// Commands is a slice of all available commands.
-var Commands = []interface{}{
-	&PingCommand{},
+	commandName := i.ApplicationCommandData().Name
+	requiredLevel, ok := commandPermissions[commandName]
+
+	if ok {
+		if !auth.CheckPermission(s, i, requiredLevel) {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "🚫 你没有权限执行此命令",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+	}
+
+	switch commandName {
+	case "start_scan":
+		HandleStartScan(s, i)
+	case "ping":
+		HandlePing(s, i)
+	default:
+		// Optionally, send an error message for unknown commands.
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "🚫内部错误：Unknown command.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	}
 }

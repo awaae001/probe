@@ -10,7 +10,6 @@ import (
 // Register all handlers to the bot.
 func Register(b *bot.Bot) {
 	// Register event handlers
-	b.Session.AddHandler(MessageCreate(b))
 	b.Session.AddHandler(InteractionCreate(b))
 	b.Session.AddHandler(ThreadCreateHandler)
 	b.Session.AddHandler(ThreadDeleteHandler)
