@@ -4,6 +4,8 @@ import (
 	"context"
 	"discord-bot/database"
 	"discord-bot/models"
+	"discord-bot/utils"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -18,10 +20,15 @@ const maxThreadConcurrencyPerPartition = 24 // 每个分区内最大并发线程
 
 // StartScanning initiates the concurrent scanning process.
 func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, isFullScan bool) {
-	log.Println("Starting the scanning process...")
+	startTime := time.Now()
+	scanType := "partial"
+	if isFullScan {
+		scanType = "full"
+	}
+	utils.Info("Scanner", "Scan Start", fmt.Sprintf("Starting a %s scan.", scanType))
 
 	if len(scanningConfig) == 0 {
-		log.Println("No valid guild configurations found.")
+		utils.Warn("Scanner", "Configuration", "No valid guild configurations found.")
 		return
 	}
 
@@ -102,9 +109,20 @@ func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, i
 		wg.Add(1)
 		go worker(i+1, s, ctx, taskChan, &wg)
 	}
-
 	wg.Wait()
-	log.Printf("Scanning process finished. Found %d new posts in total.", atomic.LoadInt64(&totalNewPostsFound))
+
+	duration := time.Since(startTime)
+	totalFound := atomic.LoadInt64(&totalNewPostsFound)
+	guildsScanned := len(scanningConfig)
+
+	details := fmt.Sprintf(
+		"扫描完成\n- 扫描了 %d 个服务器\n- 一共执行了 %d 个频道\n- 发现了 %d 个帖子\n- 耗时 %v",
+		guildsScanned,
+		totalPartitions,
+		totalFound,
+		duration,
+	)
+	utils.Info("Scanner", "Scan Finish", details)
 }
 
 // worker is the core processing unit in the pool.

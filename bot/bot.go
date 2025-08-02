@@ -9,6 +9,7 @@ import (
 
 	"discord-bot/command"
 	"discord-bot/config"
+	"discord-bot/utils"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/spf13/viper"
@@ -31,8 +32,10 @@ func NewBot() (*Bot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Discord session: %w", err)
 	}
-
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessageReactions
+
+	// Initialize the logger
+	utils.InitLogger(dg)
 
 	return &Bot{
 		Session: dg,
@@ -100,6 +103,7 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 	startScheduler(b.Session)
 
 	fmt.Println("Bot is now running. Press CTRL-C to exit.")
+	utils.Info("Bot", "Startup", "Bot has started successfully.")
 	return nil
 }
 
@@ -109,6 +113,7 @@ func (b *Bot) Stop() {
 	if b.Session != nil {
 		b.Session.Close()
 	}
+	utils.Info("Bot", "Shutdown", "Bot stopped gracefully.")
 	fmt.Println("Bot stopped gracefully.")
 }
 

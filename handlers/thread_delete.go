@@ -3,6 +3,8 @@ package handlers
 import (
 	"discord-bot/database"
 	"discord-bot/models"
+	"discord-bot/utils"
+	"fmt"
 	"log"
 
 	"github.com/bwmarrin/discordgo"
@@ -33,8 +35,10 @@ func ThreadDeleteHandler(s *discordgo.Session, t *discordgo.ThreadDelete) {
 
 	tableName := "channel_" + t.ParentID
 	if err := database.UpdatePostStatus(db, tableName, t.ID, "deleted"); err != nil {
-		log.Printf("Error updating status for thread %s in table %s: %v", t.ID, tableName, err)
+		details := fmt.Sprintf("Error updating status for thread %s in table %s: %v", t.ID, tableName, err)
+		utils.Error("ThreadDelete", "DatabaseUpdate", details)
 	} else {
-		log.Printf("Successfully marked thread %s as deleted in table %s", t.ID, tableName)
+		details := fmt.Sprintf("Successfully marked thread %s as deleted in table %s", t.ID, tableName)
+		utils.Info("ThreadDelete", "DatabaseUpdate", details)
 	}
 }

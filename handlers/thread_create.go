@@ -3,8 +3,11 @@ package handlers
 import (
 	"discord-bot/database"
 	"discord-bot/models"
+	"discord-bot/utils"
+	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/spf13/viper"
@@ -84,9 +87,23 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 
 	// 6. Get the first message of the thread
 	// The first message has the same ID as the thread itself.
-	firstMessage, err := s.ChannelMessage(t.ID, t.ID)
-	if err != nil {
+	var firstMessage *discordgo.Message
+	for i := 0; i < 4; i++ {
+		firstMessage, err = s.ChannelMessage(t.ID, t.ID)
+		if err == nil {
+			break
+		}
+		if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Response.StatusCode == 404 {
+			log.Printf("Got 404 for first message in thread %s, retrying in 10s... (%d/3)", t.ID, i)
+			time.Sleep(10 * time.Second)
+			continue
+		}
 		log.Printf("Error getting first message for thread %s: %v", t.ID, err)
+		return
+	}
+
+	if err != nil {
+		log.Printf("Failed to get first message for thread %s after multiple retries: %v", t.ID, err)
 		return
 	}
 
@@ -144,8 +161,10 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 
 	// 8. Insert the post into the database
 	if err := database.InsertPost(db, post, guildThreadConfig.TableName); err != nil {
-		log.Printf("Error inserting post %s into database: %v", post.ThreadID, err)
+		details := fmt.Sprintf("Error inserting post %s into database: %v", post.ThreadID, err)
+		utils.Error("ThreadCreate", "DatabaseInsert", details)
 	} else {
-		log.Printf("Successfully saved new thread: %s to table %s", post.ThreadID, guildThreadConfig.TableName)
+		details := fmt.Sprintf("Successfully saved new thread: %s to table %s", post.ThreadID, guildThreadConfig.TableName)
+		utils.Info("ThreadCreate", "DatabaseInsert", details)
 	}
 }
