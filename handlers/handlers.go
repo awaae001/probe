@@ -5,4 +5,5 @@ package handlers
 var Handlers = []interface{}{
 	MessageCreate,
 	ThreadCreateHandler,
+	ThreadDeleteHandler,
 }

@@ -15,6 +15,7 @@ type Post struct {
 	CoverImageURL   string `db:"cover_image_url"`
 	TotalReactions  int    `db:"total_reactions"`
 	UniqueReactions int    `db:"unique_reactions"`
+	Status          string `db:"status"`
 }
 
 // Exclusion represents a thread that should be excluded from scanning.

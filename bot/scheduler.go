@@ -7,6 +7,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/robfig/cron/v3"
+	"github.com/spf13/viper"
 )
 
 var c *cron.Cron
@@ -25,11 +26,15 @@ func startScheduler(s *discordgo.Session) {
 	c.Start()
 	log.Println("Cron job scheduled to run hourly.")
 
-	// Perform an initial scan on startup.
-	go func() {
-		log.Println("Performing initial scan...")
-		scanner.StartScanning(s, true) // Full scan
-	}()
+	// Perform an initial scan on startup based on config.
+	if viper.GetBool("bot.ScanAtStartup") {
+		go func() {
+			log.Println("Performing initial scan on startup...")
+			scanner.StartScanning(s, true) // Full scan
+		}()
+	} else {
+		log.Println("Skipping initial scan on startup as per configuration.")
+	}
 }
 
 // stopScheduler stops the cron jobs.

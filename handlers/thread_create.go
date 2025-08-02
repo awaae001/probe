@@ -12,39 +12,52 @@ import (
 
 // ThreadCreateHandler handles the THREAD_CREATE event.
 func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
+	log.Printf("New thread created event received for thread ID %s in guild %s", t.ID, t.GuildID)
 	// 1. Load configurations
-	var scanningConfig models.ScanningConfig
+	var scanningConfig models.GuildConfig
 	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
-		// This can happen if the guild is not in scanning_config.json, which is fine.
+		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
 		return
 	}
-
 	var threadConfig models.ThreadConfig
 	if err := viper.Unmarshal(&threadConfig); err != nil {
 		log.Printf("Error unmarshalling thread config: %v", err)
 		return
 	}
 
-	// 2. Check if the channel is monitored
+	// 2. Check if the thread's category is monitored and the channel is not excluded.
+	forumChannel, err := s.Channel(t.ParentID)
+	if err != nil {
+		log.Printf("Error getting details for forum channel %s: %v", t.ParentID, err)
+		return
+	}
+	categoryID := forumChannel.ParentID
+	log.Printf("Thread created in channel %s (Category ID: %s)", t.ParentID, categoryID)
+
 	isMonitored := false
-	for _, category := range scanningConfig[t.GuildID].Data {
-		if t.ParentID == category.ID {
-			isMonitored = true
-			break
-		}
-		for _, channelID := range category.ChannelID {
-			if t.ParentID == channelID {
-				isMonitored = true
+	if categoryConfig, ok := scanningConfig.Data[categoryID]; ok {
+		log.Printf("Thread's category '%s' (%s) is configured for monitoring.", categoryConfig.CategoryName, categoryID)
+
+		// Check if the specific forum channel is in the exclusion list.
+		isExcluded := false
+		for _, excludedID := range categoryConfig.ChannelID {
+			if t.ParentID == excludedID {
+				isExcluded = true
 				break
 			}
 		}
-		if isMonitored {
-			break
+
+		if !isExcluded {
+			isMonitored = true
+			log.Printf("Channel %s is not in the exclusion list. Proceeding...", t.ParentID)
+		} else {
+			log.Printf("Channel %s is in the exclusion list for category %s. Ignoring.", t.ParentID, categoryID)
 		}
+	} else {
+		log.Printf("Thread's category %s is not configured for monitoring. Ignoring.", categoryID)
 	}
 
 	if !isMonitored {
-		// log.Printf("Thread created in unmonitored channel %s, ignoring.", t.ParentID)
 		return
 	}
 
@@ -55,14 +68,16 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 		return
 	}
 
-	// 4. Initialize database
-	if err := database.InitDB(guildThreadConfig.Database); err != nil {
-		log.Printf("Failed to initialize database for guild %s: %v", t.GuildID, err)
+	// 4. Initialize independent database
+	db, err := database.InitThreadDB(guildThreadConfig.Database)
+	if err != nil {
+		log.Printf("Failed to initialize independent database for guild %s: %v", t.GuildID, err)
 		return
 	}
+	defer db.Close()
 
 	// 5. Create table if not exists
-	if err := database.CreateTableForChannel(database.DB, guildThreadConfig.TableName); err != nil {
+	if err := database.CreateTableForChannel(db, guildThreadConfig.TableName); err != nil {
 		log.Printf("Error creating table %s: %v", guildThreadConfig.TableName, err)
 		return
 	}
@@ -76,10 +91,28 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 
 	// 7. Populate the Post model
+	// Get the parent channel (forum) to access its tags
+	parentChannel, err := s.Channel(t.ParentID)
+	if err != nil {
+		log.Printf("Error getting parent channel %s: %v", t.ParentID, err)
+		// We can continue without tags if this fails
+	}
+
+	// Create a map of tag IDs to tag names for efficient lookup
+	tagMap := make(map[string]string)
+	if parentChannel != nil {
+		for _, tag := range parentChannel.AvailableTags {
+			tagMap[tag.ID] = tag.Name
+		}
+	}
+
+	// Populate tagNames using the map
 	var tagNames []string
 	if t.AppliedTags != nil {
 		for _, tagID := range t.AppliedTags {
-			tagNames = append(tagNames, string(tagID))
+			if name, ok := tagMap[tagID]; ok {
+				tagNames = append(tagNames, name)
+			}
 		}
 	}
 
@@ -110,7 +143,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 
 	// 8. Insert the post into the database
-	if err := database.InsertPost(database.DB, post, guildThreadConfig.TableName); err != nil {
+	if err := database.InsertPost(db, post, guildThreadConfig.TableName); err != nil {
 		log.Printf("Error inserting post %s into database: %v", post.ThreadID, err)
 	} else {
 		log.Printf("Successfully saved new thread: %s to table %s", post.ThreadID, guildThreadConfig.TableName)

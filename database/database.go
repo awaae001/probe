@@ -47,28 +47,36 @@ func InitDB(dbPath string) error {
 // CreateTableForChannel creates a new table for a specific forum channel if it doesn't already exist.
 func CreateTableForChannel(db *sql.DB, tableName string) error {
 	query := fmt.Sprintf(`
-	   CREATE TABLE IF NOT EXISTS %s (
-	       db_id INTEGER PRIMARY KEY AUTOINCREMENT,
-	       thread_id TEXT UNIQUE,
-	       channel_id TEXT,
-	       title TEXT,
-	       author TEXT,
-	       author_id TEXT,
-	       content TEXT,
-	       tags TEXT,
-	       message_count INTEGER,
-	       timestamp INTEGER,
-	       cover_image_url TEXT,
-	       total_reactions INTEGER,
-	       unique_reactions INTEGER
-	   );`, tableName)
+    CREATE TABLE IF NOT EXISTS %s (
+        db_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT UNIQUE,
+        channel_id TEXT,
+        title TEXT,
+        author TEXT,
+        author_id TEXT,
+        content TEXT,
+        tags TEXT,
+        message_count INTEGER,
+        timestamp INTEGER,
+        cover_image_url TEXT,
+        total_reactions INTEGER,
+        unique_reactions INTEGER,
+        status TEXT DEFAULT 'active'
+    );`, tableName)
 
 	_, err := db.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create table %s: %w", tableName, err)
 	}
 
-	log.Printf("Table %s ensured to exist.", tableName)
+	// Add the 'status' column if it doesn't exist, with a default value.
+	alterQuery := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN status TEXT DEFAULT 'active'`, tableName)
+	if _, err := db.Exec(alterQuery); err != nil {
+		// We expect an error if the column already exists, so we can ignore it.
+		// A more robust solution would check the error message.
+	}
+
+	log.Printf("Table %s ensured to exist and is up to date.", tableName)
 	return nil
 }
 
@@ -175,4 +183,20 @@ func GetExcludedThreads(db *sql.DB, guildID, channelID string) (map[string]bool,
 		excluded[threadID] = true
 	}
 	return excluded, nil
+}
+func UpdatePostStatus(db *sql.DB, tableName, threadID, status string) error {
+	query := fmt.Sprintf(`UPDATE %s SET status = ? WHERE thread_id = ?`, tableName)
+
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement for updating post status: %w", err)
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(status, threadID)
+	if err != nil {
+		return fmt.Errorf("failed to execute statement for updating post status for thread %s: %w", threadID, err)
+	}
+
+	return nil
 }

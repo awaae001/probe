@@ -1,0 +1,7 @@
+bot:
+  prefix: "!"
+  ScanAtStartup: false
+
+commands:
+  allowguils:
+    - 1369594465383219293
