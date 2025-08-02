@@ -9,7 +9,7 @@ type Command interface {
 
 // AllCommands holds all the command instances.
 var AllCommands = []Command{
-	&StartScanCommand{},
+	&ScanCommand{},
 	&PingCommand{},
 }
 

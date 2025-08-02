@@ -13,8 +13,12 @@ import (
 func HandleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	switch data.Name {
-	case "start_scan":
-		handleGuildAutocomplete(s, i)
+	case "scan":
+		for _, opt := range i.ApplicationCommandData().Options {
+			if opt.Name == "guild_id" && opt.Focused {
+				handleGuildAutocomplete(s, i)
+			}
+		}
 	}
 }
 

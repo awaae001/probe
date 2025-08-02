@@ -2,36 +2,52 @@ package command
 
 import "github.com/bwmarrin/discordgo"
 
-// StartScanCommand defines the structure for the /start_scan command.
-type StartScanCommand struct{}
+// ScanCommand defines the structure for the /scan command.
+type ScanCommand struct{}
 
 // Definition returns the application command definition.
-func (c *StartScanCommand) Definition() *discordgo.ApplicationCommand {
+func (c *ScanCommand) Definition() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
-		Name:        "start_scan",
+		Name:        "scan",
 		Description: "Manually trigger a scan",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
-				Name:        "action",
+				Name:        "type",
 				Description: "The type of scan to perform",
 				Type:        discordgo.ApplicationCommandOptionString,
 				Required:    true,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{
-						Name:  "全局扫描 (Global Scan)",
-						Value: "global_scan",
+						Name:  "Global Scan",
+						Value: "global",
 					},
 					{
-						Name:  "活跃贴扫描 (Active Thread Scan)",
+						Name:  "Guild Scan",
+						Value: "guild",
+					},
+				},
+			},
+			{
+				Name:        "scan_mode",
+				Description: "The mode of scan to perform",
+				Type:        discordgo.ApplicationCommandOptionString,
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{
+						Name:  "Full Scan",
+						Value: "full_scan",
+					},
+					{
+						Name:  "Active Thread Scan",
 						Value: "active_thread_scan",
 					},
 				},
 			},
 			{
-				Name:         "guild",
-				Description:  "The guild to scan",
+				Name:         "guild_id",
+				Description:  "The guild to scan (required for guild scan)",
 				Type:         discordgo.ApplicationCommandOptionString,
-				Required:     true,
+				Required:     false,
 				Autocomplete: true,
 			},
 		},

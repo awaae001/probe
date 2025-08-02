@@ -18,8 +18,8 @@ func CommandDispatcher(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	commandPermissions := map[string]string{
-		"start_scan": "admin",
-		"ping":       "guest",
+		"scan": "admin",
+		"ping": "guest",
 	}
 
 	commandName := i.ApplicationCommandData().Name
@@ -39,8 +39,8 @@ func CommandDispatcher(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	switch commandName {
-	case "start_scan":
-		HandleStartScan(s, i)
+	case "scan":
+		HandleScan(s, i)
 	case "ping":
 		HandlePing(s, i)
 	default:

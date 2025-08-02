@@ -10,36 +10,45 @@ import (
 	"github.com/spf13/viper"
 )
 
-// HandleStartScan handles the logic for the /start_scan command.
-func HandleStartScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
+// HandleScan handles the logic for the /scan command.
+func HandleScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	options := i.ApplicationCommandData().Options
 	optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
 	for _, opt := range options {
 		optionMap[opt.Name] = opt
 	}
 
-	var action, guildID string
+	var scanType, guildID, scanMode string
 
-	if opt, ok := optionMap["action"]; ok {
-		action = opt.StringValue()
+	if opt, ok := optionMap["type"]; ok {
+		scanType = opt.StringValue()
 	}
-	if opt, ok := optionMap["guild"]; ok {
+	if opt, ok := optionMap["guild_id"]; ok {
 		guildID = opt.StringValue()
 	}
+	if opt, ok := optionMap["scan_mode"]; ok {
+		scanMode = opt.StringValue()
+	}
 
-	if guildID == "" || action == "" {
+	if scanType == "guild" && guildID == "" {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: "Error: Missing required options.",
+				Content: "Error: Guild ID is required for a guild-specific scan.",
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
 		return
 	}
 
-	// Respond to the interaction immediately to avoid timeout.
-	initialResponse := fmt.Sprintf("Received command to start **%s** for guild **%s**. Preparing to scan...", action, guildID)
+	// Respond to the interaction immediately.
+	var initialResponse string
+	if scanType == "global" {
+		initialResponse = fmt.Sprintf("Received command to start a **%s** global scan. Preparing to scan...", scanMode)
+	} else {
+		initialResponse = fmt.Sprintf("Received command to start a **%s** for guild **%s**. Preparing to scan...", scanMode, guildID)
+	}
+
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -48,39 +57,47 @@ func HandleStartScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		},
 	})
 
-	// Run the actual scanning in a separate goroutine.
+	// Run the scanning in a goroutine.
 	go func() {
 		var fullConfig models.ScanningConfig
 		if err := viper.Unmarshal(&fullConfig); err != nil {
-			log.Printf("Error unmarshalling full config for manual scan: %v", err)
+			log.Printf("Error unmarshalling config for manual scan: %v", err)
 			s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Content: "Error: Could not load scanning configuration.",
 			})
 			return
 		}
 
-		guildConfig, ok := fullConfig[guildID]
-		if !ok {
-			log.Printf("Error: Guild ID %s not found in scanning configuration.", guildID)
-			s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-				Content: fmt.Sprintf("Error: Guild ID %s not found in your configuration.", guildID),
-			})
-			return
+		configToScan := make(models.ScanningConfig)
+		if scanType == "global" {
+			configToScan = fullConfig
+		} else {
+			guildConfig, ok := fullConfig[guildID]
+			if !ok {
+				log.Printf("Error: Guild ID %s not found in config.", guildID)
+				s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+					Content: fmt.Sprintf("Error: Guild ID %s not found in your configuration.", guildID),
+				})
+				return
+			}
+			configToScan[guildID] = guildConfig
 		}
 
-		// Create a temporary config with only the selected guild.
-		singleGuildConfig := make(models.ScanningConfig)
-		singleGuildConfig[guildID] = guildConfig
+		isFullScan := (scanMode == "full_scan")
+		log.Printf("Starting manual scan (isFullScan: %v, type: %s)", isFullScan, scanType)
+		scanner.StartScanning(s, configToScan, isFullScan)
+		log.Printf("Manual scan finished (type: %s)", scanType)
 
-		isFullScan := (action == "global_scan")
-
-		log.Printf("Starting manual scan (isFullScan: %v) for guild: %s", isFullScan, guildConfig.Name)
-		scanner.StartScanning(s, singleGuildConfig, isFullScan)
-		log.Printf("Manual scan finished for guild: %s", guildConfig.Name)
-
-		// Send a followup message to notify the user.
+		// Send a followup message.
+		var followupContent string
+		if scanType == "global" {
+			followupContent = fmt.Sprintf("✅ Global scan (%s) has completed.", scanMode)
+		} else {
+			guildName := configToScan[guildID].Name
+			followupContent = fmt.Sprintf("✅ Scan (%s) for guild **%s** has completed.", scanMode, guildName)
+		}
 		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: fmt.Sprintf("✅ Scan **%s** for guild **%s** has completed.", action, guildConfig.Name),
+			Content: followupContent,
 		})
 	}()
 }
