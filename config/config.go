@@ -31,6 +31,19 @@ func LoadConfig() {
 			// Config file was found but another error was produced
 			panic(fmt.Errorf("fatal error in base config file: %w", err))
 		}
+
+		// Merge the thread configuration file
+		viper.SetConfigName("thread_config") // set the name of the json config file
+		viper.SetConfigType("json")          // set the type of the config file
+		viper.AddConfigPath("./config")      // path to look for the config file in
+
+		if err := viper.MergeInConfig(); err != nil {
+			if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+				fmt.Println("Thread config file (config/thread_config.json) not found.")
+			} else {
+				panic(fmt.Errorf("fatal error in thread config file: %w", err))
+			}
+		}
 	}
 
 	viper.SetConfigName("scanning_config") // set the name of the json config file

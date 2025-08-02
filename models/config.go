@@ -18,3 +18,13 @@ type CategoryData struct {
 	ID           string   `json:"id" mapstructure:"id"`
 	ChannelID    []string `json:"channel_id" mapstructure:"channel_id"`
 }
+
+// ThreadConfig represents the structure of the thread_config.json file.
+type ThreadConfig map[string]GuildThreadConfig
+
+// GuildThreadConfig represents the configuration for a single guild's thread handling.
+type GuildThreadConfig struct {
+	Name      string `json:"name" mapstructure:"name"`
+	Database  string `json:"database" mapstructure:"database"`
+	TableName string `json:"tableName" mapstructure:"tableName"`
+}
