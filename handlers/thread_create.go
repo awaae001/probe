@@ -160,6 +160,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 
 	// 8. Insert the post into the database
+	// 8. Insert the post into the database
 	if err := database.InsertPost(db, post, guildThreadConfig.TableName); err != nil {
 		utils.Error("ThreadCreate", "AddPostToDB", fmt.Sprintf("Error adding post to database for thread %s: %v", t.ID, err))
 		return

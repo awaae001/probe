@@ -14,21 +14,23 @@ import (
 // ThreadDeleteHandler handles the THREAD_DELETE event.
 func ThreadDeleteHandler(s *discordgo.Session, t *discordgo.ThreadDelete) {
 	log.Printf("Thread delete event received for thread ID %s in guild %s", t.ID, t.GuildID)
-	var threadConfig models.ThreadConfig
-	if err := viper.Unmarshal(&threadConfig); err != nil {
-		log.Printf("Error unmarshalling thread config: %v", err)
+	// Load the scanning configuration for the specific guild.
+	var scanningConfig models.GuildConfig
+	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
+		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
 		return
 	}
 
-	guildThreadConfig, ok := threadConfig[t.GuildID]
-	if !ok {
-		log.Printf("No thread configuration found for guild %s", t.GuildID)
+	// Check if a database path is configured.
+	if scanningConfig.DBPath == "" {
+		log.Printf("No scanning database configuration (DBPath) found for guild %s. Ignoring delete event.", t.GuildID)
 		return
 	}
 
-	db, err := database.InitThreadDB(guildThreadConfig.Database)
+	// Initialize the database connection using the path from scanning_config.
+	db, err := database.InitThreadDB(scanningConfig.DBPath)
 	if err != nil {
-		log.Printf("Failed to initialize independent database for guild %s: %v", t.GuildID, err)
+		log.Printf("Failed to initialize scanning database for guild %s: %v", t.GuildID, err)
 		return
 	}
 	defer db.Close()
