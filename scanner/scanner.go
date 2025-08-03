@@ -122,6 +122,7 @@ func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, i
 		duration,
 	)
 	utils.Info("Scanner", "Scan Finish", details)
+	log.Print(details)
 }
 
 // worker is the core processing unit in the pool.

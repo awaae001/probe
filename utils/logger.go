@@ -23,9 +23,9 @@ var (
 // InitLogger initializes the logger with a Discord session.
 func InitLogger(s *discordgo.Session) {
 	session = s
-	channelID = viper.GetString("bot.adminChanneId")
+	channelID = viper.GetString("bot.adminChannelId")
 	if channelID == "" {
-		log.Println("Warning: bot.adminChanneId is not set in config.yaml. Logging to channel will be disabled.")
+		log.Println("Warning: bot.adminChannelId is not set in config.yaml. Logging to channel will be disabled.")
 	}
 }
 

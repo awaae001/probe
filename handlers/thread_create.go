@@ -88,22 +88,22 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	// 6. Get the first message of the thread
 	// The first message has the same ID as the thread itself.
 	var firstMessage *discordgo.Message
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		firstMessage, err = s.ChannelMessage(t.ID, t.ID)
 		if err == nil {
 			break
 		}
 		if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Response.StatusCode == 404 {
-			log.Printf("Got 404 for first message in thread %s, retrying in 10s... (%d/3)", t.ID, i)
+			utils.Warn("ThreadCreate", "GetFirstMessage", fmt.Sprintf("Got 404 for first message in thread %s, retrying in 10s... (%d/3)", t.ID, i+1))
 			time.Sleep(10 * time.Second)
 			continue
 		}
-		log.Printf("Error getting first message for thread %s: %v", t.ID, err)
+		utils.Error("ThreadCreate", "GetFirstMessage", fmt.Sprintf("Error getting first message for thread %s: %v", t.ID, err))
 		return
 	}
 
 	if err != nil {
-		log.Printf("Failed to get first message for thread %s after multiple retries: %v", t.ID, err)
+		utils.Error("ThreadCreate", "GetFirstMessage", fmt.Sprintf("Failed to get first message for thread %s after 3 retries: %v", t.ID, err))
 		return
 	}
 
@@ -111,7 +111,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	// Get the parent channel (forum) to access its tags
 	parentChannel, err := s.Channel(t.ParentID)
 	if err != nil {
-		log.Printf("Error getting parent channel %s: %v", t.ParentID, err)
+		utils.Warn("ThreadCreate", "GetParentChannel", fmt.Sprintf("Error getting parent channel %s: %v. Continuing without tags.", t.ParentID, err))
 		// We can continue without tags if this fails
 	}
 
@@ -161,10 +161,14 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 
 	// 8. Insert the post into the database
 	if err := database.InsertPost(db, post, guildThreadConfig.TableName); err != nil {
-		details := fmt.Sprintf("Error inserting post %s into database: %v", post.ThreadID, err)
-		utils.Error("ThreadCreate", "DatabaseInsert", details)
-	} else {
-		details := fmt.Sprintf("Successfully saved new thread: %s to table %s", post.ThreadID, guildThreadConfig.TableName)
-		utils.Info("ThreadCreate", "DatabaseInsert", details)
+		utils.Error("ThreadCreate", "AddPostToDB", fmt.Sprintf("Error adding post to database for thread %s: %v", t.ID, err))
+		return
+	}
+
+	log.Printf("Successfully added post for thread %s to database.", t.ID)
+
+	// 9. Add a reaction to the first message to indicate it's been processed
+	if err := s.MessageReactionAdd(t.ID, firstMessage.ID, "✅"); err != nil {
+		utils.Warn("ThreadCreate", "AddReaction", fmt.Sprintf("Error adding reaction to thread %s: %v", t.ID, err))
 	}
 }

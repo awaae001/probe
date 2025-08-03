@@ -69,9 +69,8 @@ func HandleScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 
 		configToScan := make(models.ScanningConfig)
-		if scanType == "global" {
-			configToScan = fullConfig
-		} else {
+		switch scanType {
+		case "guild":
 			guildConfig, ok := fullConfig[guildID]
 			if !ok {
 				log.Printf("Error: Guild ID %s not found in config.", guildID)
@@ -81,6 +80,20 @@ func HandleScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				return
 			}
 			configToScan[guildID] = guildConfig
+		case "global":
+			if scanMode == "active_thread_scan" && guildID != "" {
+				guildConfig, ok := fullConfig[guildID]
+				if !ok {
+					log.Printf("Error: Guild ID %s not found in config.", guildID)
+					s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+						Content: fmt.Sprintf("Error: Guild ID %s not found in your configuration.", guildID),
+					})
+					return
+				}
+				configToScan[guildID] = guildConfig
+			} else {
+				configToScan = fullConfig
+			}
 		}
 
 		isFullScan := (scanMode == "full_scan")
