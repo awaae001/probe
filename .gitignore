@@ -20,6 +20,7 @@ vendor/
 
 # Project-specific binary name
 discord-bot
+probe_app
 
 # IDE settings
 .vscode/

@@ -17,6 +17,9 @@ import (
 
 const maxPartitionConcurrency = 45          // 每个服务器内最大并发分区扫描数
 const maxThreadConcurrencyPerPartition = 24 // 每个分区内最大并发线程处理数
+const maxConcurrentAPICalls = 50            // 全局最大并发API调用数
+
+var apiSemaphore = make(chan struct{}, maxConcurrentAPICalls)
 
 // StartScanning initiates the concurrent scanning process.
 func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, isFullScan bool) {
@@ -32,93 +35,89 @@ func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, i
 		return
 	}
 
-	var totalPartitions int
-	var tasks []models.PartitionTask
-
-	for guildID, guildConfig := range scanningConfig {
-		log.Printf("Preparing to scan guild: %s (%s)", guildConfig.Name, guildID)
-
-		if err := database.InitDB(guildConfig.DBPath); err != nil {
-			log.Printf("Failed to initialize database for guild %s: %v", guildID, err)
-			continue
-		}
-
-		for key, channelConfig := range guildConfig.Data {
-			if len(channelConfig.ChannelID) > 0 {
-				// Scan only specified channels
-				for _, chID := range channelConfig.ChannelID {
-					task := models.PartitionTask{
-						DB:          database.DB,
-						GuildConfig: &guildConfig,
-						ChannelID:   chID,
-						Key:         key,
-						IsFullScan:  isFullScan,
-					}
-					tasks = append(tasks, task)
-					totalPartitions++
-				}
-			} else {
-				// Scan all forum channels in the category if no specific channels are listed
-				channels, err := s.GuildChannels(guildID)
-				if err != nil {
-					log.Printf("Failed to get channels for guild %s: %v", guildID, err)
-					continue
-				}
-				for _, channel := range channels {
-					if channel.Type == discordgo.ChannelTypeGuildForum && channel.ParentID == channelConfig.ID {
-						task := models.PartitionTask{
-							DB:          database.DB,
-							GuildConfig: &guildConfig,
-							ChannelID:   channel.ID,
-							Key:         key,
-							IsFullScan:  isFullScan,
-						}
-						tasks = append(tasks, task)
-						totalPartitions++
-					}
-				}
-			}
-		}
-	}
-
-	if totalPartitions == 0 {
-		log.Println("No partitions to scan.")
-		return
-	}
-
+	var wg sync.WaitGroup
+	var totalPartitions int64
 	var partitionsDone int64
 	var totalNewPostsFound int64
-
-	taskChan := make(chan models.PartitionTask, totalPartitions)
-	for _, task := range tasks {
-		task.TotalPartitions = totalPartitions
-		task.PartitionsDone = &partitionsDone
-		task.TotalNewPostsFound = &totalNewPostsFound
-		taskChan <- task
-	}
-	close(taskChan)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var wg sync.WaitGroup
-	numWorkers := min(totalPartitions, maxPartitionConcurrency)
-	log.Printf("Starting %d workers for %d partitions.", numWorkers, totalPartitions)
+	taskChan := make(chan models.PartitionTask, maxPartitionConcurrency)
+	workerWg := &sync.WaitGroup{}
 
+	// Start a fixed number of workers
+	numWorkers := maxPartitionConcurrency
+	workerWg.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go worker(i+1, s, ctx, taskChan, &wg)
+		go worker(s, ctx, taskChan, workerWg)
 	}
+
+	for guildID, guildConfig := range scanningConfig {
+		wg.Add(1)
+		go func(guildID string, guildConfig models.GuildConfig) {
+			defer wg.Done()
+
+			log.Printf("Preparing to scan guild: %s (%s)", guildConfig.Name, guildID)
+			db, err := database.InitDB(guildConfig.DBPath)
+			if err != nil {
+				log.Printf("Failed to initialize database for guild %s: %v", guildID, err)
+				return
+			}
+			defer db.Close()
+
+			var partitionWg sync.WaitGroup
+			for key, channelConfig := range guildConfig.Data {
+				processChannel := func(chID string) {
+					atomic.AddInt64(&totalPartitions, 1)
+					partitionWg.Add(1)
+					task := models.PartitionTask{
+						DB:                 db,
+						GuildConfig:        &guildConfig,
+						ChannelID:          chID,
+						Key:                key,
+						IsFullScan:         isFullScan,
+						PartitionsDone:     &partitionsDone,
+						TotalNewPostsFound: &totalNewPostsFound,
+						Wg:                 &partitionWg,
+					}
+					taskChan <- task
+				}
+
+				if len(channelConfig.ChannelID) > 0 {
+					for _, chID := range channelConfig.ChannelID {
+						processChannel(chID)
+					}
+				} else {
+					channels, err := s.GuildChannels(guildID)
+					if err != nil {
+						log.Printf("Failed to get channels for guild %s: %v", guildID, err)
+						return
+					}
+					for _, channel := range channels {
+						if channel.Type == discordgo.ChannelTypeGuildForum && channel.ParentID == channelConfig.ID {
+							processChannel(channel.ID)
+						}
+					}
+				}
+			}
+			partitionWg.Wait() // Wait for all partitions of this guild to be processed
+		}(guildID, guildConfig)
+	}
+
 	wg.Wait()
+	close(taskChan)
+	workerWg.Wait()
 
 	duration := time.Since(startTime)
 	totalFound := atomic.LoadInt64(&totalNewPostsFound)
 	guildsScanned := len(scanningConfig)
+	finalPartitions := atomic.LoadInt64(&totalPartitions)
 
 	details := fmt.Sprintf(
 		"扫描完成\n- 扫描了 %d 个服务器\n- 一共执行了 %d 个频道\n- 发现了 %d 个帖子\n- 耗时 %v",
 		guildsScanned,
-		totalPartitions,
+		finalPartitions,
 		totalFound,
 		duration,
 	)
@@ -126,25 +125,20 @@ func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, i
 }
 
 // worker is the core processing unit in the pool.
-func worker(id int, s *discordgo.Session, ctx context.Context, tasks <-chan models.PartitionTask, wg *sync.WaitGroup) {
+func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.PartitionTask, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for task := range tasks {
-		defer atomic.AddInt64(task.PartitionsDone, 1)
-
-		select {
-		case <-ctx.Done():
-			log.Printf("Worker %d cancelling task for partition %s.", id, task.Key)
-			return
-		default:
+		if task.Wg != nil {
+			defer task.Wg.Done()
 		}
-
 		startTime := time.Now()
 		channelID := task.ChannelID
 		tableName := "channel_" + channelID
 
 		if err := database.CreateTableForChannel(task.DB, tableName); err != nil {
 			log.Printf("Error creating table %s: %v", tableName, err)
-			return
+			atomic.AddInt64(task.PartitionsDone, 1)
+			continue
 		}
 
 		existingThreads := make(map[string]bool)
@@ -174,9 +168,7 @@ func worker(id int, s *discordgo.Session, ctx context.Context, tasks <-chan mode
 				return
 			}
 
-			completedPartitions := atomic.LoadInt64(task.PartitionsDone)
-			remainingPartitions := task.TotalPartitions - int(completedPartitions)
-			optimalThreadsPerPartition := calculateOptimalThreadsPerPartition(remainingPartitions)
+			optimalThreadsPerPartition := maxThreadConcurrencyPerPartition
 
 			chunkSize := (len(threads) + optimalThreadsPerPartition - 1) / optimalThreadsPerPartition
 			if chunkSize == 0 {
@@ -202,7 +194,8 @@ func worker(id int, s *discordgo.Session, ctx context.Context, tasks <-chan mode
 		activeThreads, err := s.ThreadsActive(channelID)
 		if err != nil {
 			log.Printf("Error getting active threads for channel %s: %v", channelID, err)
-			return
+			atomic.AddInt64(task.PartitionsDone, 1)
+			continue
 		}
 		processThreadsConcurrently(activeThreads.Threads, "active")
 
@@ -214,7 +207,7 @@ func worker(id int, s *discordgo.Session, ctx context.Context, tasks <-chan mode
 				select {
 				case <-ctx.Done():
 					log.Println("Scan cancelled during pagination.")
-					return
+					return // Exit worker completely if context is cancelled
 				default:
 				}
 
@@ -247,100 +240,106 @@ func worker(id int, s *discordgo.Session, ctx context.Context, tasks <-chan mode
 			}
 		}
 		log.Printf("Partition %s (%s) scan completed in %v", task.Key, task.GuildConfig.Name, time.Since(startTime))
+		atomic.AddInt64(task.PartitionsDone, 1)
 	}
 }
 
 func processThreadsChunk(s *discordgo.Session, chunk models.ThreadChunk, existingThreads map[string]bool, existingThreadsMutex *sync.RWMutex, task models.PartitionTask, tableName string, ctx context.Context) {
 	for _, thread := range chunk.Threads {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+		apiSemaphore <- struct{}{} // Acquire API semaphore
+		func() {
+			defer func() { <-apiSemaphore }() // Release API semaphore
 
-		if thread.ThreadMetadata != nil && thread.ThreadMetadata.Locked {
-			continue
-		}
-
-		existingThreadsMutex.RLock()
-		_, exists := existingThreads[thread.ID]
-		existingThreadsMutex.RUnlock()
-		if exists {
-			// log.Printf("Skipping thread %s, already exists in database.", thread.ID)
-			continue
-		}
-
-		firstMessage, err := s.ChannelMessage(thread.ID, thread.ID)
-		if err != nil {
-			if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Response.StatusCode == 404 {
-				log.Printf("Thread %s not found (404), adding to exclusion list.", thread.ID)
-				if err := database.AddThreadToExclusionList(task.DB, task.GuildConfig.GuildsID, task.ChannelID, thread.ID, "Not Found"); err != nil {
-					log.Printf("Error adding thread %s to exclusion list: %v", thread.ID, err)
-				}
-			} else {
-				log.Printf("Error getting first message for thread %s: %v", thread.ID, err)
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
-			continue
-		}
 
-		var tagNames []string
-		if thread.AppliedTags != nil {
-			for _, tagID := range thread.AppliedTags {
-				tagNames = append(tagNames, string(tagID))
+			if thread.ThreadMetadata != nil && thread.ThreadMetadata.Locked {
+				return
 			}
-		}
 
-		content := firstMessage.Content
-		runes := []rune(content)
-		if len(runes) > 512 {
-			content = string(runes[:512])
-		}
+			existingThreadsMutex.RLock()
+			_, exists := existingThreads[thread.ID]
+			existingThreadsMutex.RUnlock()
+			if exists {
+				// log.Printf("Skipping thread %s, already exists in database.", thread.ID)
+				return
+			}
 
-		var coverImageURL string
-		if len(firstMessage.Attachments) > 0 {
-			coverImageURL = firstMessage.Attachments[0].URL
-		}
-
-		totalReactions := 0
-		uniqueUserIDs := make(map[string]struct{})
-
-		for _, reaction := range firstMessage.Reactions {
-			totalReactions += reaction.Count
-			users, err := s.MessageReactions(thread.ID, firstMessage.ID, reaction.Emoji.APIName(), 100, "", "")
+			firstMessage, err := s.ChannelMessage(thread.ID, thread.ID)
 			if err != nil {
-				log.Printf("Error getting users for reaction %s on message %s: %v", reaction.Emoji.APIName(), firstMessage.ID, err)
-				continue
+				if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Response.StatusCode == 404 {
+					log.Printf("Thread %s not found (404), adding to exclusion list.", thread.ID)
+					if err := database.AddThreadToExclusionList(task.DB, task.GuildConfig.GuildsID, task.ChannelID, thread.ID, "Not Found"); err != nil {
+						log.Printf("Error adding thread %s to exclusion list: %v", thread.ID, err)
+					}
+				} else {
+					log.Printf("Error getting first message for thread %s: %v", thread.ID, err)
+				}
+				return
 			}
-			for _, user := range users {
-				uniqueUserIDs[user.ID] = struct{}{}
+
+			var tagNames []string
+			if thread.AppliedTags != nil {
+				for _, tagID := range thread.AppliedTags {
+					tagNames = append(tagNames, string(tagID))
+				}
 			}
-		}
-		uniqueReactions := len(uniqueUserIDs)
 
-		post := models.Post{
-			ThreadID:        thread.ID,
-			ChannelID:       thread.ParentID,
-			Title:           thread.Name,
-			Author:          firstMessage.Author.Username,
-			AuthorID:        firstMessage.Author.ID,
-			Content:         content,
-			Tags:            strings.Join(tagNames, ","),
-			MessageCount:    thread.MessageCount,
-			Timestamp:       firstMessage.Timestamp.Unix(),
-			CoverImageURL:   coverImageURL,
-			TotalReactions:  totalReactions,
-			UniqueReactions: uniqueReactions,
-		}
+			content := firstMessage.Content
+			runes := []rune(content)
+			if len(runes) > 512 {
+				content = string(runes[:512])
+			}
 
-		if err := database.InsertPost(task.DB, post, tableName); err != nil {
-			log.Printf("Error inserting post %s into database: %v", post.ThreadID, err)
-		} else {
-			atomic.AddInt64(task.TotalNewPostsFound, 1)
-			existingThreadsMutex.Lock()
-			existingThreads[post.ThreadID] = true
-			existingThreadsMutex.Unlock()
-			log.Printf("Successfully saved post: %s to table %s", post.ThreadID, tableName)
-		}
+			var coverImageURL string
+			if len(firstMessage.Attachments) > 0 {
+				coverImageURL = firstMessage.Attachments[0].URL
+			}
+
+			totalReactions := 0
+			uniqueUserIDs := make(map[string]struct{})
+
+			for _, reaction := range firstMessage.Reactions {
+				totalReactions += reaction.Count
+				users, err := s.MessageReactions(thread.ID, firstMessage.ID, reaction.Emoji.APIName(), 100, "", "")
+				if err != nil {
+					log.Printf("Error getting users for reaction %s on message %s: %v", reaction.Emoji.APIName(), firstMessage.ID, err)
+					continue
+				}
+				for _, user := range users {
+					uniqueUserIDs[user.ID] = struct{}{}
+				}
+			}
+			uniqueReactions := len(uniqueUserIDs)
+
+			post := models.Post{
+				ThreadID:        thread.ID,
+				ChannelID:       thread.ParentID,
+				Title:           thread.Name,
+				Author:          firstMessage.Author.Username,
+				AuthorID:        firstMessage.Author.ID,
+				Content:         content,
+				Tags:            strings.Join(tagNames, ","),
+				MessageCount:    thread.MessageCount,
+				Timestamp:       firstMessage.Timestamp.Unix(),
+				CoverImageURL:   coverImageURL,
+				TotalReactions:  totalReactions,
+				UniqueReactions: uniqueReactions,
+			}
+
+			if err := database.InsertPost(task.DB, post, tableName); err != nil {
+				log.Printf("Error inserting post %s into database: %v", post.ThreadID, err)
+			} else {
+				atomic.AddInt64(task.TotalNewPostsFound, 1)
+				existingThreadsMutex.Lock()
+				existingThreads[post.ThreadID] = true
+				existingThreadsMutex.Unlock()
+				log.Printf("Successfully saved post: %s to table %s", post.ThreadID, tableName)
+			}
+		}()
 	}
 }
 
@@ -354,27 +353,6 @@ func chunkThreads(threads []*discordgo.Channel, chunkSize int) []models.ThreadCh
 		})
 	}
 	return chunks
-}
-
-func calculateOptimalThreadsPerPartition(remainingPartitions int) int {
-	if remainingPartitions <= 0 {
-		return maxThreadConcurrencyPerPartition
-	}
-
-	const minThreadsPerPartition = 4
-	var threadsPerPartition int
-
-	if remainingPartitions <= 3 {
-		threadsPerPartition = maxThreadConcurrencyPerPartition
-	} else if remainingPartitions <= 5 {
-		threadsPerPartition = 12
-	} else if remainingPartitions <= 10 {
-		threadsPerPartition = 8
-	} else {
-		threadsPerPartition = minThreadsPerPartition
-	}
-
-	return min(threadsPerPartition, maxThreadConcurrencyPerPartition)
 }
 
 func min(a, b int) int {

@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -13,9 +14,9 @@ type PartitionTask struct {
 	ChannelID          string // The specific channel to scan
 	Key                string // The category key, for context
 	IsFullScan         bool
-	TotalPartitions    int
 	PartitionsDone     *int64
 	TotalNewPostsFound *int64
+	Wg                 *sync.WaitGroup
 }
 
 // ThreadChunk is a slice of threads to be processed concurrently.

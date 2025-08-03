@@ -12,36 +12,34 @@ import (
 	_ "github.com/mattn/go-sqlite3" // Import the SQLite3 driver
 )
 
-// DB is the global database connection pool.
-var DB *sql.DB
-
 // InitDB initializes the database connection. It takes the database path as input.
-func InitDB(dbPath string) error {
+func InitDB(dbPath string) (*sql.DB, error) {
 	// Ensure the directory for the database file exists.
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create database directory: %w", err)
+		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
 	// Open the SQLite database. It will be created if it doesn't exist.
-	var err error
-	DB, err = sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	// Ping the database to verify the connection.
-	if err = DB.Ping(); err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+	if err = db.Ping(); err != nil {
+		db.Close() // Close the connection if ping fails
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// Create the exclusions table if it doesn't exist
-	if err := createExclusionsTable(DB); err != nil {
-		return fmt.Errorf("failed to create exclusions table: %w", err)
+	if err := createExclusionsTable(db); err != nil {
+		db.Close() // Close the connection if table creation fails
+		return nil, fmt.Errorf("failed to create exclusions table: %w", err)
 	}
 
 	log.Println("Successfully connected to the database at", dbPath)
-	return nil
+	return db, nil
 }
 
 // CreateTableForChannel creates a new table for a specific forum channel if it doesn't already exist.
