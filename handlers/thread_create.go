@@ -167,9 +167,5 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 
 	log.Printf("Successfully added post for thread %s to database.", t.ID)
-
-	// 9. Add a reaction to the first message to indicate it's been processed
-	if err := s.MessageReactionAdd(t.ID, firstMessage.ID, "✅"); err != nil {
-		utils.Warn("ThreadCreate", "AddReaction", fmt.Sprintf("Error adding reaction to thread %s: %v", t.ID, err))
-	}
+	utils.Info("ThreadCreate", "AddPostToDB", fmt.Sprintf("Successfully added post for thread %s to database.", t.ID))
 }
