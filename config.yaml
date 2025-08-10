@@ -15,3 +15,8 @@ commands:
       - 1371272565926002758
     Guest:
       - 0
+
+grpc:
+  server_address: "77.90.3.254:50051"
+  timeout: 30
+  enable_logging: true
