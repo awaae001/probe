@@ -20,9 +20,18 @@ const maxThreadConcurrencyPerPartition = 24 // 每个分区内最大并发线程
 const maxConcurrentAPICalls = 50            // 全局最大并发API调用数
 
 var apiSemaphore = make(chan struct{}, maxConcurrentAPICalls)
+var isScanning atomic.Bool // Add this lock
 
 // StartScanning initiates the concurrent scanning process.
 func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, isFullScan bool) {
+	// Check if a scan is already in progress. If so, skip this run.
+	if !isScanning.CompareAndSwap(false, true) {
+		log.Println("Scanner is already running. Skipping this scan.")
+		utils.Warn("Scanner", "Concurrency", "A scan is already in progress. Skipping this scheduled scan.")
+		return
+	}
+	defer isScanning.Store(false) // Ensure the lock is released when the function exits.
+
 	startTime := time.Now()
 	scanType := "partial"
 	if isFullScan {
@@ -129,119 +138,122 @@ func StartScanning(s *discordgo.Session, scanningConfig models.ScanningConfig, i
 func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.PartitionTask, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for task := range tasks {
-		if task.Wg != nil {
-			defer task.Wg.Done()
-		}
-		startTime := time.Now()
-		channelID := task.ChannelID
-		tableName := "channel_" + channelID
-
-		if err := database.CreateTableForChannel(task.DB, tableName); err != nil {
-			log.Printf("Error creating table %s: %v", tableName, err)
-			atomic.AddInt64(task.PartitionsDone, 1)
-			continue
-		}
-
-		existingThreads := make(map[string]bool)
-		existingThreadsMutex := &sync.RWMutex{}
-
-		if !task.IsFullScan {
-			postIDs, err := database.GetAllPostIDs(task.DB, tableName)
-			if err != nil {
-				log.Printf("Error getting all post IDs for active scan from table %s: %v", tableName, err)
-			} else {
-				existingThreads = postIDs
+		// Process each task in its own function scope to ensure defer is called correctly.
+		func(t models.PartitionTask) {
+			if t.Wg != nil {
+				defer t.Wg.Done()
 			}
-		}
+			startTime := time.Now()
+			channelID := t.ChannelID
+			tableName := "channel_" + channelID
 
-		excludedThreads, err := database.GetExcludedThreads(task.DB, task.GuildConfig.GuildsID, channelID)
-		if err != nil {
-			log.Printf("Error getting excluded threads for channel %s: %v", channelID, err)
-		} else {
-			for threadID := range excludedThreads {
-				existingThreads[threadID] = true
-			}
-		}
-
-		processThreadsConcurrently := func(threads []*discordgo.Channel, threadType string) {
-			log.Printf("Processing %d %s threads for channel %s", len(threads), threadType, channelID)
-			if len(threads) == 0 {
-				return
+			if err := database.CreateTableForChannel(t.DB, tableName); err != nil {
+				log.Printf("Error creating table %s: %v", tableName, err)
+				atomic.AddInt64(t.PartitionsDone, 1)
+				return // Use return instead of continue
 			}
 
-			optimalThreadsPerPartition := maxThreadConcurrencyPerPartition
+			existingThreads := make(map[string]bool)
+			existingThreadsMutex := &sync.RWMutex{}
 
-			chunkSize := (len(threads) + optimalThreadsPerPartition - 1) / optimalThreadsPerPartition
-			if chunkSize == 0 {
-				chunkSize = 1
-			}
-
-			chunks := chunkThreads(threads, chunkSize)
-			var chunkWg sync.WaitGroup
-			semaphore := make(chan struct{}, optimalThreadsPerPartition)
-
-			for _, chunk := range chunks {
-				chunkWg.Add(1)
-				go func(c models.ThreadChunk) {
-					defer chunkWg.Done()
-					semaphore <- struct{}{}
-					defer func() { <-semaphore }()
-					processThreadsChunk(s, c, existingThreads, existingThreadsMutex, task, tableName, ctx)
-				}(chunk)
-			}
-			chunkWg.Wait()
-		}
-
-		activeThreads, err := s.ThreadsActive(channelID)
-		if err != nil {
-			log.Printf("Error getting active threads for channel %s: %v", channelID, err)
-			atomic.AddInt64(task.PartitionsDone, 1)
-			continue
-		}
-		processThreadsConcurrently(activeThreads.Threads, "active")
-
-		if task.IsFullScan {
-			var before *time.Time
-			pageCount := 0
-			for {
-				pageCount++
-				select {
-				case <-ctx.Done():
-					log.Println("Scan cancelled during pagination.")
-					return // Exit worker completely if context is cancelled
-				default:
-				}
-
-				archivedThreads, err := s.ThreadsArchived(channelID, before, 100)
+			if !t.IsFullScan {
+				postIDs, err := database.GetAllPostIDs(t.DB, tableName)
 				if err != nil {
-					log.Printf("Error getting archived threads for channel %s on page %d: %v", channelID, pageCount, err)
-					break
+					log.Printf("Error getting all post IDs for active scan from table %s: %v", tableName, err)
+				} else {
+					existingThreads = postIDs
 				}
-
-				log.Printf("Page %d: Fetched %d archived threads for channel %s. HasMore: %v", pageCount, len(archivedThreads.Threads), channelID, archivedThreads.HasMore)
-
-				if len(archivedThreads.Threads) == 0 {
-					log.Printf("No more archived threads found for channel %s on page %d.", channelID, pageCount)
-					break
-				}
-
-				processThreadsConcurrently(archivedThreads.Threads, "archived")
-
-				if !archivedThreads.HasMore {
-					log.Printf("Stopping archived thread fetch for channel %s: HasMore is false.", channelID)
-					break
-				}
-
-				lastThread := archivedThreads.Threads[len(archivedThreads.Threads)-1]
-				if lastThread.ThreadMetadata == nil {
-					log.Printf("Archived thread %s has no metadata, stopping pagination.", lastThread.ID)
-					break
-				}
-				before = &lastThread.ThreadMetadata.ArchiveTimestamp
 			}
-		}
-		log.Printf("Partition %s (%s) scan completed in %v", task.Key, task.GuildConfig.Name, time.Since(startTime))
-		atomic.AddInt64(task.PartitionsDone, 1)
+
+			excludedThreads, err := database.GetExcludedThreads(t.DB, t.GuildConfig.GuildsID, channelID)
+			if err != nil {
+				log.Printf("Error getting excluded threads for channel %s: %v", channelID, err)
+			} else {
+				for threadID := range excludedThreads {
+					existingThreads[threadID] = true
+				}
+			}
+
+			processThreadsConcurrently := func(threads []*discordgo.Channel, threadType string) {
+				log.Printf("Processing %d %s threads for channel %s", len(threads), threadType, channelID)
+				if len(threads) == 0 {
+					return
+				}
+
+				optimalThreadsPerPartition := maxThreadConcurrencyPerPartition
+
+				chunkSize := (len(threads) + optimalThreadsPerPartition - 1) / optimalThreadsPerPartition
+				if chunkSize == 0 {
+					chunkSize = 1
+				}
+
+				chunks := chunkThreads(threads, chunkSize)
+				var chunkWg sync.WaitGroup
+				semaphore := make(chan struct{}, optimalThreadsPerPartition)
+
+				for _, chunk := range chunks {
+					chunkWg.Add(1)
+					go func(c models.ThreadChunk) {
+						defer chunkWg.Done()
+						semaphore <- struct{}{}
+						defer func() { <-semaphore }()
+						processThreadsChunk(s, c, existingThreads, existingThreadsMutex, t, tableName, ctx)
+					}(chunk)
+				}
+				chunkWg.Wait()
+			}
+
+			activeThreads, err := s.ThreadsActive(channelID)
+			if err != nil {
+				log.Printf("Error getting active threads for channel %s: %v", channelID, err)
+				atomic.AddInt64(t.PartitionsDone, 1)
+				return // Use return instead of continue
+			}
+			processThreadsConcurrently(activeThreads.Threads, "active")
+
+			if t.IsFullScan {
+				var before *time.Time
+				pageCount := 0
+				for {
+					pageCount++
+					select {
+					case <-ctx.Done():
+						log.Println("Scan cancelled during pagination.")
+						return // Exit worker completely if context is cancelled
+					default:
+					}
+
+					archivedThreads, err := s.ThreadsArchived(channelID, before, 100)
+					if err != nil {
+						log.Printf("Error getting archived threads for channel %s on page %d: %v", channelID, pageCount, err)
+						break
+					}
+
+					log.Printf("Page %d: Fetched %d archived threads for channel %s. HasMore: %v", pageCount, len(archivedThreads.Threads), channelID, archivedThreads.HasMore)
+
+					if len(archivedThreads.Threads) == 0 {
+						log.Printf("No more archived threads found for channel %s on page %d.", channelID, pageCount)
+						break
+					}
+
+					processThreadsConcurrently(archivedThreads.Threads, "archived")
+
+					if !archivedThreads.HasMore {
+						log.Printf("Stopping archived thread fetch for channel %s: HasMore is false.", channelID)
+						break
+					}
+
+					lastThread := archivedThreads.Threads[len(archivedThreads.Threads)-1]
+					if lastThread.ThreadMetadata == nil {
+						log.Printf("Archived thread %s has no metadata, stopping pagination.", lastThread.ID)
+						break
+					}
+					before = &lastThread.ThreadMetadata.ArchiveTimestamp
+				}
+			}
+			log.Printf("Partition %s (%s) scan completed in %v", t.Key, t.GuildConfig.Name, time.Since(startTime))
+			atomic.AddInt64(t.PartitionsDone, 1)
+		}(task)
 	}
 }
 
