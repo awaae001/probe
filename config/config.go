@@ -67,13 +67,13 @@ func LoadConfig() {
 		}
 	}
 
-	viper.SetConfigName("new_scam")
+	viper.SetConfigName("new_scan")
 	viper.SetConfigType("json")
 	viper.AddConfigPath("./config")
 
 	if err := viper.MergeInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			log.Printf("未找到新人加入扫描配置文件 (config/new_scam.json)，将跳过合并。")
+			log.Printf("未找到新人加入扫描配置文件 (config/new_scan.json)，将跳过合并。")
 		} else {
 			panic(fmt.Errorf("合并新人加入扫描配置文件时发生致命错误: %w", err))
 		}

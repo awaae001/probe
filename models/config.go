@@ -1,6 +1,5 @@
 package models
 
-// ScanningConfig represents the structure of the scanning_config.json file.
 // It's a map where keys are guild IDs.
 type ScanningConfig map[string]GuildConfig
 
@@ -42,12 +41,17 @@ type AuthConfig struct {
 	Guest       []string `mapstructure:"Guest"`
 }
 
-// NewScamConfig represents the structure of the new_scam.json file.
-type NewScamConfig map[string]NewScamGuildConfig
+// NewScanConfig 代表 new_scan.json 配置文件的结构
+// 用于配置成员统计和监控功能
+type NewScanConfig struct {
+	// 数据库文件路径
+	DBFilePath string `json:"db_file_path" mapstructure:"db_file_path"`
+	// 服务器配置数据，键为服务器ID
+	Data map[string]NewScanGuildData `json:"data" mapstructure:"data"`
+}
 
-// NewScamGuildConfig represents the configuration for a single guild's scam monitoring.
-type NewScamGuildConfig struct {
-	Name     string `json:"name" mapstructure:"name"`
-	Filepath string `json:"filepath" mapstructure:"filepath"`
-	RoleID   string `json:"role_id" mapstructure:"role_id"`
+// NewScanGuildData 代表单个服务器的成员统计配置
+type NewScanGuildData struct {
+	// 需要监控的身份组ID
+	RoleID string `json:"role_id" mapstructure:"role_id"`
 }
