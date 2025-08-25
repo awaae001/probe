@@ -13,6 +13,9 @@ func Register(b *bot.Bot) {
 	b.Session.AddHandler(InteractionCreate(b))
 	b.Session.AddHandler(ThreadCreateHandler)
 	b.Session.AddHandler(ThreadDeleteHandler)
+	b.Session.AddHandler(MemberAddHandler)
+	b.Session.AddHandler(MemberRemoveHandler)
+	b.Session.AddHandler(MemberUpdateHandler)
 
 	// Add a ready handler to log when the bot is connected.
 	b.Session.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {

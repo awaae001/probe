@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"discord-bot/database"
 	"log"
 
 	"discord-bot/models"
@@ -29,8 +30,17 @@ func startScheduler(s *discordgo.Session) {
 	if err != nil {
 		log.Fatalf("Could not set up cron job: %v", err)
 	}
+
+	_, err = c.AddFunc("@daily", func() {
+		log.Println("Running daily member stats update...")
+		database.ScheduledUpdate(s)
+	})
+	if err != nil {
+		log.Fatalf("Could not set up daily member stats cron job: %v", err)
+	}
+
 	c.Start()
-	log.Println("Cron job scheduled to run hourly.")
+	log.Println("Cron jobs scheduled.")
 
 	// Perform an initial scan on startup based on config.
 	if viper.GetBool("bot.ScanAtStartup") {

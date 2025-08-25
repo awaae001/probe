@@ -102,7 +102,7 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 
 	startScheduler(b.Session)
 
-	fmt.Println("Bot is now running. Press CTRL-C to exit.")
+	log.Printf("Bot is now running. Press CTRL-C to exit.")
 	utils.Info("Bot", "Startup", "Bot has started successfully.")
 	return nil
 }
@@ -114,7 +114,7 @@ func (b *Bot) Stop() {
 		b.Session.Close()
 	}
 	utils.Info("Bot", "Shutdown", "Bot stopped gracefully.")
-	fmt.Println("Bot stopped gracefully.")
+	log.Printf("Bot stopped gracefully.")
 }
 
 // Run is the main entry point for the bot application.

@@ -1,6 +1,6 @@
 bot:
   prefix: "!"
-  scan_on_startup: false
+  scan_on_startup: true
   AdminChannelId: 1401130878742171730
   commands:
     clear_on_startup: true

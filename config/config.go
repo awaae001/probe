@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -18,7 +19,7 @@ import (
 func LoadConfig() {
 	// 1. 从 .env 文件加载环境变量，如果文件不存在则忽略。
 	if err := godotenv.Load(); err != nil {
-		fmt.Println("未找到 .env 文件，将跳过加载。")
+		log.Printf("未找到 .env 文件，将跳过加载。")
 	}
 
 	// 2. 设置并读取基础配置文件 (config.yaml)。
@@ -32,7 +33,7 @@ func LoadConfig() {
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// 配置文件未找到是正常情况，可以继续。
-			fmt.Println("未找到基础配置文件 (config.yaml)，将仅使用环境变量和后续合并的配置。")
+			log.Printf("未找到基础配置文件 (config.yaml)，将仅使用环境变量和后续合并的配置。")
 		} else {
 			// 如果找到配置文件但解析出错，则终止程序。
 			panic(fmt.Errorf("解析基础配置文件时发生致命错误: %w", err))
@@ -47,7 +48,7 @@ func LoadConfig() {
 
 	if err := viper.MergeInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			fmt.Println("未找到线程配置文件 (config/thread_config.json)，将跳过合并。")
+			log.Printf("未找到线程配置文件 (config/thread_config.json)，将跳过合并。")
 		} else {
 			panic(fmt.Errorf("合并线程配置文件时发生致命错误: %w", err))
 		}
@@ -60,9 +61,21 @@ func LoadConfig() {
 
 	if err := viper.MergeInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			fmt.Println("未找到扫描配置文件 (config/scanning_config.json)，将跳过合并。")
+			log.Printf("未找到扫描配置文件 (config/scanning_config.json)，将跳过合并。")
 		} else {
 			panic(fmt.Errorf("合并扫描配置文件时发生致命错误: %w", err))
+		}
+	}
+
+	viper.SetConfigName("new_scam")
+	viper.SetConfigType("json")
+	viper.AddConfigPath("./config")
+
+	if err := viper.MergeInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			log.Printf("未找到新人加入扫描配置文件 (config/new_scam.json)，将跳过合并。")
+		} else {
+			panic(fmt.Errorf("合并新人加入扫描配置文件时发生致命错误: %w", err))
 		}
 	}
 }

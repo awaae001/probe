@@ -41,3 +41,13 @@ type AuthConfig struct {
 	AdminsRoles []string `mapstructure:"AdminsRoles"`
 	Guest       []string `mapstructure:"Guest"`
 }
+
+// NewScamConfig represents the structure of the new_scam.json file.
+type NewScamConfig map[string]NewScamGuildConfig
+
+// NewScamGuildConfig represents the configuration for a single guild's scam monitoring.
+type NewScamGuildConfig struct {
+	Name     string `json:"name" mapstructure:"name"`
+	Filepath string `json:"filepath" mapstructure:"filepath"`
+	RoleID   string `json:"role_id" mapstructure:"role_id"`
+}
