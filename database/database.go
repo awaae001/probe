@@ -198,3 +198,51 @@ func UpdatePostStatus(db *sql.DB, tableName, threadID, status string) error {
 
 	return nil
 }
+
+// ArchiveAllPosts marks all posts in a table as archived
+func ArchiveAllPosts(db *sql.DB, tableName string) error {
+	query := fmt.Sprintf(`UPDATE %s SET status = 'archived' WHERE 1=1`, tableName)
+	
+	_, err := db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to archive all posts in table %s: %w", tableName, err)
+	}
+	
+	log.Printf("All posts in table %s marked as archived", tableName)
+	return nil
+}
+
+// UpsertActivePost inserts a new post or updates existing post with latest data and marks it as active
+func UpsertActivePost(db *sql.DB, post models.Post, tableName string) error {
+	query := fmt.Sprintf(`
+    INSERT OR REPLACE INTO %s (
+        thread_id, channel_id, title, author, author_id, content, tags, 
+        message_count, timestamp, cover_image_url, total_reactions, unique_reactions, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active');`, tableName)
+
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement for upserting active post: %w", err)
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(
+		post.ThreadID,
+		post.ChannelID,
+		post.Title,
+		post.Author,
+		post.AuthorID,
+		post.Content,
+		post.Tags,
+		post.MessageCount,
+		post.Timestamp,
+		post.CoverImageURL,
+		post.TotalReactions,
+		post.UniqueReactions,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to execute statement for upserting active post %s: %w", post.ThreadID, err)
+	}
+
+	return nil
+}

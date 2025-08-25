@@ -153,18 +153,18 @@ func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.Parti
 				return // Use return instead of continue
 			}
 
+			// Phase 1: Archive all posts in the channel
+			log.Printf("Phase 1: Archiving all posts in channel %s", channelID)
+			if err := database.ArchiveAllPosts(t.DB, tableName); err != nil {
+				log.Printf("Error archiving all posts in table %s: %v", tableName, err)
+				atomic.AddInt64(t.PartitionsDone, 1)
+				return
+			}
+
 			existingThreads := make(map[string]bool)
 			existingThreadsMutex := &sync.RWMutex{}
 
-			if !t.IsFullScan {
-				postIDs, err := database.GetAllPostIDs(t.DB, tableName)
-				if err != nil {
-					log.Printf("Error getting all post IDs for active scan from table %s: %v", tableName, err)
-				} else {
-					existingThreads = postIDs
-				}
-			}
-
+			// Get excluded threads to skip them during processing
 			excludedThreads, err := database.GetExcludedThreads(t.DB, t.GuildConfig.GuildsID, channelID)
 			if err != nil {
 				log.Printf("Error getting excluded threads for channel %s: %v", channelID, err)
@@ -203,6 +203,8 @@ func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.Parti
 				chunkWg.Wait()
 			}
 
+			// Phase 2: Scan and update active threads
+			log.Printf("Phase 2: Scanning active threads for channel %s", channelID)
 			activeThreads, err := s.ThreadsActive(channelID)
 			if err != nil {
 				log.Printf("Error getting active threads for channel %s: %v", channelID, err)
@@ -212,6 +214,8 @@ func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.Parti
 			processThreadsConcurrently(activeThreads.Threads, "active")
 
 			if t.IsFullScan {
+				// Phase 3: Process archived threads (full scan only)
+				log.Printf("Phase 3: Processing archived threads for channel %s (full scan)", channelID)
 				var before *time.Time
 				pageCount := 0
 				for {
@@ -273,12 +277,12 @@ func processThreadsChunk(s *discordgo.Session, chunk models.ThreadChunk, existin
 				return
 			}
 
+			// Check if thread is excluded (but not if it simply exists in database)
 			existingThreadsMutex.RLock()
-			_, exists := existingThreads[thread.ID]
+			_, isExcluded := existingThreads[thread.ID]
 			existingThreadsMutex.RUnlock()
-			if exists {
-				// log.Printf("Skipping thread %s, already exists in database.", thread.ID)
-				return
+			if isExcluded {
+				return // Skip excluded threads only
 			}
 
 			firstMessage, err := s.ChannelMessage(thread.ID, thread.ID)
@@ -343,14 +347,14 @@ func processThreadsChunk(s *discordgo.Session, chunk models.ThreadChunk, existin
 				UniqueReactions: uniqueReactions,
 			}
 
-			if err := database.InsertPost(task.DB, post, tableName); err != nil {
-				log.Printf("Error inserting post %s into database: %v", post.ThreadID, err)
+			if err := database.UpsertActivePost(task.DB, post, tableName); err != nil {
+				log.Printf("Error upserting active post %s into database: %v", post.ThreadID, err)
 			} else {
 				atomic.AddInt64(task.TotalNewPostsFound, 1)
 				existingThreadsMutex.Lock()
 				existingThreads[post.ThreadID] = true
 				existingThreadsMutex.Unlock()
-				log.Printf("Successfully saved post: %s to table %s", post.ThreadID, tableName)
+				log.Printf("Successfully upserted active post: %s to table %s", post.ThreadID, tableName)
 			}
 		}()
 	}
