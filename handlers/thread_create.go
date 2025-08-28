@@ -22,10 +22,35 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
 		return
 	}
-	var threadConfig models.ThreadConfig
-	if err := viper.Unmarshal(&threadConfig); err != nil {
-		log.Printf("Error unmarshalling thread config: %v", err)
-		return
+	// 创建 ThreadConfig，只解析 thread_config.json 中的配置
+	threadConfig := make(models.ThreadConfig)
+	
+	// 从 viper 中获取所有配置的键值
+	allSettings := viper.AllSettings()
+	for key, value := range allSettings {
+		// 跳过非线程配置的字段
+		if key == "db_file_path" || key == "data" {
+			continue
+		}
+		
+		// 尝试将值转换为 GuildThreadConfig
+		if configMap, ok := value.(map[string]interface{}); ok {
+			guildConfig := models.GuildThreadConfig{}
+			if name, ok := configMap["name"].(string); ok {
+				guildConfig.Name = name
+			}
+			if database, ok := configMap["database"].(string); ok {
+				guildConfig.Database = database
+			}
+			if tableName, ok := configMap["tableName"].(string); ok {
+				guildConfig.TableName = tableName
+			}
+			
+			// 只有当所有必要字段都存在时才添加到配置中
+			if guildConfig.Name != "" && guildConfig.Database != "" && guildConfig.TableName != "" {
+				threadConfig[key] = guildConfig
+			}
+		}
 	}
 
 	// 2. Check if the thread's category is monitored and the channel is not excluded.

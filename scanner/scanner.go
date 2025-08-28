@@ -174,22 +174,20 @@ func worker(s *discordgo.Session, ctx context.Context, tasks <-chan models.Parti
 				}
 			}
 
+			semaphore := make(chan struct{}, maxThreadConcurrencyPerPartition)
 			processThreadsConcurrently := func(threads []*discordgo.Channel, threadType string) {
 				log.Printf("Processing %d %s threads for channel %s", len(threads), threadType, channelID)
 				if len(threads) == 0 {
 					return
 				}
 
-				optimalThreadsPerPartition := maxThreadConcurrencyPerPartition
-
-				chunkSize := (len(threads) + optimalThreadsPerPartition - 1) / optimalThreadsPerPartition
+				chunkSize := (len(threads) + maxThreadConcurrencyPerPartition - 1) / maxThreadConcurrencyPerPartition
 				if chunkSize == 0 {
 					chunkSize = 1
 				}
 
 				chunks := chunkThreads(threads, chunkSize)
 				var chunkWg sync.WaitGroup
-				semaphore := make(chan struct{}, optimalThreadsPerPartition)
 
 				for _, chunk := range chunks {
 					chunkWg.Add(1)
