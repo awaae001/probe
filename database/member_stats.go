@@ -19,11 +19,13 @@ import (
 // 管理所有服务器的成员统计数据
 type MemberStatsDB struct {
 	db *sql.DB
+	s  *discordgo.Session
 }
 
 // NewMemberStatsDB 创建新的成员统计数据库实例
 // dbPath: 数据库文件路径
-func NewMemberStatsDB(dbPath string) (*MemberStatsDB, error) {
+// session: DiscordGo session
+func NewMemberStatsDB(dbPath string, session *discordgo.Session) (*MemberStatsDB, error) {
 	// 确保数据库目录存在
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -37,7 +39,7 @@ func NewMemberStatsDB(dbPath string) (*MemberStatsDB, error) {
 	}
 
 	// 创建数据库实例
-	mdb := &MemberStatsDB{db: db}
+	mdb := &MemberStatsDB{db: db, s: session}
 
 	// 初始化数据表
 	if err := mdb.initTables(); err != nil {
@@ -92,22 +94,42 @@ func (mdb *MemberStatsDB) initTables() error {
 	return nil
 }
 
-// ensureTodayRecord 确保今天的统计记录存在
+// ensureTodayRecord 确保今天的统计记录存在，并在创建时填充初始数据
 func (mdb *MemberStatsDB) ensureTodayRecord(guildID string) error {
 	today := time.Now().Format("2006-01-02")
 
-	// 使用 INSERT OR IGNORE 确保记录存在，如果已存在则不插入
-	query := `INSERT OR IGNORE INTO member_stats (guild_id, date, total_members, joins_today, leaves_today, role_members_total, role_gains_today) 
-			  VALUES (?, ?, 0, 0, 0, 0, 0)`
+	// 检查记录是否已存在
+	var exists int
+	checkQuery := "SELECT 1 FROM member_stats WHERE guild_id = ? AND date = ?"
+	err := mdb.db.QueryRow(checkQuery, guildID, today).Scan(&exists)
 
-	result, err := mdb.db.Exec(query, guildID, today)
+	// 如果记录已存在，或发生除“未找到行”之外的错误，则直接返回
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("检查记录是否存在时出错: %w", err)
+	}
+	if exists == 1 {
+		return nil // 记录已存在，无需任何操作
+	}
+
+	// 获取服务器成员总数
+	members, err := mdb.s.GuildMembers(guildID, "", 1000)
+	if err != nil {
+		log.Printf("获取服务器 %s 成员列表失败: %v", guildID, err)
+		// 即使API调用失败，也继续创建记录，但总数可能为0
+	}
+
+	// 使用 INSERT OR IGNORE 确保记录存在
+	query := `INSERT OR IGNORE INTO member_stats (guild_id, date, total_members, joins_today, leaves_today, role_members_total, role_gains_today)
+			  VALUES (?, ?, ?, 0, 0, 0, 0)`
+
+	result, err := mdb.db.Exec(query, guildID, today, len(members))
 	if err != nil {
 		return fmt.Errorf("确保今日记录失败: %w", err)
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected > 0 {
-		log.Printf("为服务器 %s 创建了 %s 的新统计记录", guildID, today)
+		log.Printf("为服务器 %s 创建了 %s 的新统计记录，总人数: %d", guildID, today, len(members))
 	}
 
 	return nil
@@ -234,7 +256,7 @@ func ScheduledUpdate(s *discordgo.Session) {
 	}
 
 	// 打开数据库连接
-	db, err := NewMemberStatsDB(newScanConfig.DBFilePath)
+	db, err := NewMemberStatsDB(newScanConfig.DBFilePath, s)
 	if err != nil {
 		log.Printf("打开成员统计数据库失败: %v", err)
 		return

@@ -1,4 +1,4 @@
-package handlers
+package thread
 
 import (
 	"discord-bot/database"

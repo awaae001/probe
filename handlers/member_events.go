@@ -30,7 +30,7 @@ func MemberAddHandler(s *discordgo.Session, m *discordgo.GuildMemberAdd) {
 	}
 
 	// 打开数据库连接
-	db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath)
+	db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath, s)
 	if err != nil {
 		log.Printf("打开成员统计数据库失败: %v", err)
 		return
@@ -67,7 +67,7 @@ func MemberRemoveHandler(s *discordgo.Session, m *discordgo.GuildMemberRemove) {
 	}
 
 	// 打开数据库连接
-	db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath)
+	db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath, s)
 	if err != nil {
 		log.Printf("打开成员统计数据库失败: %v", err)
 		return
@@ -122,11 +122,11 @@ func MemberUpdateHandler(s *discordgo.Session, m *discordgo.GuildMemberUpdate) {
 
 	// 如果现在有身份组但之前没有，说明是新获得的
 	if hasTargetRoleNow && !hadTargetRoleBefore {
-		log.Printf("检测到成员 %s (%s) 在服务器 %s 中获得了目标身份组 %s", 
+		log.Printf("检测到成员 %s (%s) 在服务器 %s 中获得了目标身份组 %s",
 			m.User.Username, m.User.ID, m.GuildID, guildData.RoleID)
 
 		// 打开数据库连接
-		db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath)
+		db, err := database.NewMemberStatsDB(newScanConfig.DBFilePath, s)
 		if err != nil {
 			log.Printf("打开成员统计数据库失败: %v", err)
 			return
@@ -142,7 +142,7 @@ func MemberUpdateHandler(s *discordgo.Session, m *discordgo.GuildMemberUpdate) {
 		log.Printf("成功记录成员 %s 在服务器 %s 获得目标身份组的统计", m.User.Username, m.GuildID)
 	} else if !hasTargetRoleNow && hadTargetRoleBefore {
 		// 如果之前有身份组但现在没有，记录日志但不统计（因为我们只关心获得的数量）
-		log.Printf("成员 %s (%s) 在服务器 %s 中失去了目标身份组 %s", 
+		log.Printf("成员 %s (%s) 在服务器 %s 中失去了目标身份组 %s",
 			m.User.Username, m.User.ID, m.GuildID, guildData.RoleID)
 	}
 }

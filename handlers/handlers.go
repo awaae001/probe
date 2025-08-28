@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"discord-bot/bot"
+	"discord-bot/handlers/thread"
 	"log"
 
 	"github.com/bwmarrin/discordgo"
@@ -11,8 +12,8 @@ import (
 func Register(b *bot.Bot) {
 	// Register event handlers
 	b.Session.AddHandler(InteractionCreate(b))
-	b.Session.AddHandler(ThreadCreateHandler)
-	b.Session.AddHandler(ThreadDeleteHandler)
+	b.Session.AddHandler(thread.ThreadCreateHandler)
+	b.Session.AddHandler(thread.ThreadDeleteHandler)
 	b.Session.AddHandler(MemberAddHandler)
 	b.Session.AddHandler(MemberRemoveHandler)
 	b.Session.AddHandler(MemberUpdateHandler)

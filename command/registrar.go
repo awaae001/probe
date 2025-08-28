@@ -11,7 +11,6 @@ type Command interface {
 var AllCommands = []Command{
 	&ScanCommand{},
 	&PingCommand{},
-	&RecentPostsCommand{},
 }
 
 // GetCommandDefinitions returns a slice of all command definitions.

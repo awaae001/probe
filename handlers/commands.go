@@ -44,8 +44,6 @@ func CommandDispatcher(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		HandleScan(s, i)
 	case "ping":
 		HandlePing(s, i)
-	case "recent_posts":
-		HandleRecentPosts(s, i)
 	default:
 		// Optionally, send an error message for unknown commands.
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

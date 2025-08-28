@@ -1,4 +1,4 @@
-package handlers
+package thread
 
 import (
 	"discord-bot/database"
@@ -24,7 +24,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 	// 创建 ThreadConfig，只解析 thread_config.json 中的配置
 	threadConfig := make(models.ThreadConfig)
-	
+
 	// 从 viper 中获取所有配置的键值
 	allSettings := viper.AllSettings()
 	for key, value := range allSettings {
@@ -32,7 +32,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 		if key == "db_file_path" || key == "data" {
 			continue
 		}
-		
+
 		// 尝试将值转换为 GuildThreadConfig
 		if configMap, ok := value.(map[string]interface{}); ok {
 			guildConfig := models.GuildThreadConfig{}
@@ -45,7 +45,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 			if tableName, ok := configMap["tableName"].(string); ok {
 				guildConfig.TableName = tableName
 			}
-			
+
 			// 只有当所有必要字段都存在时才添加到配置中
 			if guildConfig.Name != "" && guildConfig.Database != "" && guildConfig.TableName != "" {
 				threadConfig[key] = guildConfig
