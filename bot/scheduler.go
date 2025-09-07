@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"discord-bot/database"
 	"log"
 
 	"discord-bot/models"
@@ -81,14 +80,7 @@ func startScheduler(s *discordgo.Session) {
 		log.Fatalf("Could not set up cron job: %v", err)
 	}
 
-	// Daily member stats update
-	_, err = c.AddFunc("@daily", func() {
-		log.Println("Running daily member stats update...")
-		database.ScheduledUpdate(s)
-	})
-	if err != nil {
-		log.Fatalf("Could not set up daily member stats cron job: %v", err)
-	}
+	// Daily member stats update has been removed.
 
 	c.Start()
 	log.Println("Cron jobs scheduled.")
