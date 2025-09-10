@@ -20,6 +20,8 @@ func Register(b *bot.Bot) {
 	b.Session.AddHandler(thread.ThreadCreateHandler)
 	b.Session.AddHandler(thread.ThreadDeleteHandler)
 	b.Session.AddHandler(MessageCreateHandler(b))
+	b.Session.AddHandler(MessageDeleteHandler(b))
+	b.Session.AddHandler(MessageUpdateHandler(b))
 	// b.Session.AddHandler(MemberAddHandler)
 	// b.Session.AddHandler(MemberRemoveHandler)
 	// b.Session.AddHandler(MemberUpdateHandler)

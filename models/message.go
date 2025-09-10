@@ -30,6 +30,19 @@ type Message struct {
 	Timestamp      int64  `json:"timestamp"`
 	MessageContent string `json:"message_content"`
 	Attachments    string `json:"attachments"` // JSON array of attachment URLs
+	IsEdited       bool   `json:"is_edited"`   // Flag indicating if the message was edited
+}
+
+// MessageEdit represents a message edit history record
+type MessageEdit struct {
+	EditID              int64  `json:"edit_id"`              // Auto-increment ID for each edit
+	MessageID           int64  `json:"message_id"`           // Reference to original message ID
+	GuildID             int64  `json:"guild_id"`             // Guild ID (redundant storage for cross-database queries)
+	EditTimestamp       int64  `json:"edit_timestamp"`       // Timestamp when the edit occurred
+	PreviousContent     string `json:"previous_content"`     // Content before the edit
+	NewContent          string `json:"new_content"`          // Content after the edit
+	PreviousAttachments string `json:"previous_attachments"` // Attachments before the edit (JSON)
+	NewAttachments      string `json:"new_attachments"`      // Attachments after the edit (JSON)
 }
 
 // ChannelStat represents channel message statistics
@@ -42,6 +55,15 @@ type ChannelStat struct {
 type UserStat struct {
 	UserID       int64 `json:"user_id"`
 	MessageCount int64 `json:"message_count"`
+}
+
+// MessageDeletion represents a message deletion record
+type MessageDeletion struct {
+	DeletionID        int64 `json:"deletion_id"`        // Auto-increment ID for each deletion
+	MessageID         int64 `json:"message_id"`         // ID of the deleted message
+	GuildID           int64 `json:"guild_id"`           // Guild ID where the message was deleted
+	ChannelID         int64 `json:"channel_id"`         // Channel ID where the message was deleted
+	DeletionTimestamp int64 `json:"deletion_timestamp"` // Timestamp when the deletion occurred
 }
 
 // DatabaseStatus represents the structure of db_status.json

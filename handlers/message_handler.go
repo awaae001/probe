@@ -24,6 +24,60 @@ type MessageCollector struct {
 
 var globalMessageCollector *MessageCollector
 
+// validateGuildAndChannel checks if message collection is enabled for the guild and channel
+func validateGuildAndChannel(guildID, channelID string) (models.GuildMsgConfig, bool) {
+	// Skip if message collector is not initialized
+	if globalMessageCollector == nil {
+		return models.GuildMsgConfig{}, false
+	}
+
+	// Skip if no guild ID (DM messages)
+	if guildID == "" {
+		return models.GuildMsgConfig{}, false
+	}
+
+	// Check if this guild is configured for message collection
+	guildConfig, exists := globalMessageCollector.config.MessageListener.Data[guildID]
+	if !exists {
+		return models.GuildMsgConfig{}, false
+	}
+
+	// Check if this channel is excluded
+	if slices.Contains(guildConfig.Exclude, channelID) {
+		return models.GuildMsgConfig{}, false
+	}
+
+	return guildConfig, true
+}
+
+// parseDiscordIDs converts Discord string IDs to int64
+func parseDiscordIDs(messageID, userID, guildID, channelID string) (int64, int64, int64, int64, error) {
+	msgID, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("error parsing message ID %s: %w", messageID, err)
+	}
+
+	var uID int64
+	if userID != "" {
+		uID, err = strconv.ParseInt(userID, 10, 64)
+		if err != nil {
+			return 0, 0, 0, 0, fmt.Errorf("error parsing user ID %s: %w", userID, err)
+		}
+	}
+
+	gID, err := strconv.ParseInt(guildID, 10, 64)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("error parsing guild ID %s: %w", guildID, err)
+	}
+
+	cID, err := strconv.ParseInt(channelID, 10, 64)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("error parsing channel ID %s: %w", channelID, err)
+	}
+
+	return msgID, uID, gID, cID, nil
+}
+
 // InitMessageCollector initializes the global message collector
 func InitMessageCollector() error {
 	// Load message configuration from viper
@@ -54,50 +108,21 @@ func InitMessageCollector() error {
 // MessageCreateHandler handles Discord message create events
 func MessageCreateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.MessageCreate) {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		// Skip if message collector is not initialized
-		if globalMessageCollector == nil {
-			return
-		}
-
 		// Skip bot messages
 		if m.Author.Bot {
 			return
 		}
 
-		// Check if this guild is configured for message collection
-		guildID := m.GuildID
-		guildConfig, exists := globalMessageCollector.config.MessageListener.Data[guildID]
-		if !exists {
+		// Validate guild and channel
+		_, valid := validateGuildAndChannel(m.GuildID, m.ChannelID)
+		if !valid {
 			return
-		}
-
-		// Check if this channel is excluded
-		if slices.Contains(guildConfig.Exclude, m.ChannelID) {
-			return // Skip excluded channels
 		}
 
 		// Convert Discord IDs to int64
-		messageID, err := strconv.ParseInt(m.ID, 10, 64)
+		messageID, userID, guildIDInt, channelID, err := parseDiscordIDs(m.ID, m.Author.ID, m.GuildID, m.ChannelID)
 		if err != nil {
-			log.Printf("Error parsing message ID %s: %v", m.ID, err)
-			return
-		}
-
-		userID, err := strconv.ParseInt(m.Author.ID, 10, 64)
-		if err != nil {
-			log.Printf("Error parsing user ID %s: %v", m.Author.ID, err)
-			return
-		}
-
-		guildIDInt, err := strconv.ParseInt(guildID, 10, 64)
-		if err != nil {
-			log.Printf("Error parsing guild ID %s: %v", guildID, err)
-			return
-		}
-
-		channelID, err := strconv.ParseInt(m.ChannelID, 10, 64)
-		if err != nil {
-			log.Printf("Error parsing channel ID %s: %v", m.ChannelID, err)
+			log.Printf("%v", err)
 			return
 		}
 
@@ -124,6 +149,7 @@ func MessageCreateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 			Timestamp:      time.Now().Unix(),
 			MessageContent: m.Content,
 			Attachments:    attachmentsJSON,
+			IsEdited:       false,
 		}
 
 		// Insert message into database
@@ -134,7 +160,7 @@ func MessageCreateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 
 		// Update status file with current database info
 		go func() {
-			dbPath, err := globalMessageCollector.messageDB.GetDBPath(guildID)
+			dbPath, err := globalMessageCollector.messageDB.GetDBPath(m.GuildID)
 			if err != nil {
 				log.Printf("Error getting DB path for status update: %v", err)
 				return
@@ -146,13 +172,137 @@ func MessageCreateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 				return
 			}
 
-			if err := globalMessageCollector.statusManager.UpdateDatabaseInfo(guildID, dbPath, messageCount); err != nil {
+			if err := globalMessageCollector.statusManager.UpdateDatabaseInfo(m.GuildID, dbPath, messageCount); err != nil {
 				log.Printf("Error updating database status: %v", err)
 			}
 		}()
 
 		// Log successful message collection (can be removed in production)
-		log.Printf("Message collected: Guild %s, Channel %s, User %s", guildID, m.ChannelID, m.Author.ID)
+		log.Printf("Message collected: Guild %s, Channel %s, User %s", m.GuildID, m.ChannelID, m.Author.ID)
+	}
+}
+
+// MessageDeleteHandler handles Discord message delete events
+func MessageDeleteHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.MessageDelete) {
+	return func(s *discordgo.Session, m *discordgo.MessageDelete) {
+		// Validate guild and channel
+		_, valid := validateGuildAndChannel(m.GuildID, m.ChannelID)
+		if !valid {
+			return
+		}
+
+		// Convert Discord IDs to int64 (using empty string for userID since delete events don't have user info)
+		messageID, _, guildIDInt, channelIDInt, err := parseDiscordIDs(m.ID, "", m.GuildID, m.ChannelID)
+		if err != nil {
+			log.Printf("%v", err)
+			return
+		}
+
+		// Create deletion record
+		deletion := models.MessageDeletion{
+			MessageID:         messageID,
+			GuildID:           guildIDInt,
+			ChannelID:         channelIDInt,
+			DeletionTimestamp: time.Now().Unix(),
+		}
+
+		// Record the deletion in the deletions table
+		if err := globalMessageCollector.messageDB.InsertMessageDeletion(deletion); err != nil {
+			log.Printf("Error recording message deletion %d: %v", messageID, err)
+			return
+		}
+
+		// Log successful message deletion tracking
+		log.Printf("Message deletion tracked: Guild %s, Channel %s, Message %s", m.GuildID, m.ChannelID, m.ID)
+	}
+}
+
+// MessageUpdateHandler handles Discord message update events
+func MessageUpdateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.MessageUpdate) {
+	return func(s *discordgo.Session, m *discordgo.MessageUpdate) {
+		// Skip bot messages
+		if m.Author != nil && m.Author.Bot {
+			return
+		}
+
+		// Validate guild and channel
+		_, valid := validateGuildAndChannel(m.GuildID, m.ChannelID)
+		if !valid {
+			return
+		}
+
+		// Convert Discord IDs to int64 (using empty string for userID since it may not be available in updates)
+		messageID, _, guildIDInt, _, err := parseDiscordIDs(m.ID, "", m.GuildID, m.ChannelID)
+		if err != nil {
+			log.Printf("%v", err)
+			return
+		}
+
+		// Check if BeforeUpdate is available (contains previous content)
+		if m.BeforeUpdate == nil {
+			// Try to get original content from database or immediate API call
+			go func() {
+				var originalContent string
+				var originalAttachments string
+				found := false
+				
+				// First, try to get from our database
+				if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
+					originalContent = originalMessage.MessageContent
+					originalAttachments = originalMessage.Attachments
+					found = true
+					log.Printf("Retrieved original message content from database for message %s", m.ID)
+				}
+				
+				// If not found in database, try immediate API call (before CDN updates)
+				if !found {
+					if originalMessage, err := s.ChannelMessage(m.ChannelID, m.ID); err == nil {
+						originalContent = originalMessage.Content
+						
+						// Extract attachment URLs
+						var attachmentURLs []string
+						for _, attachment := range originalMessage.Attachments {
+							attachmentURLs = append(attachmentURLs, attachment.URL)
+						}
+						if len(attachmentURLs) > 0 {
+							if jsonData, err := json.Marshal(attachmentURLs); err == nil {
+								originalAttachments = string(jsonData)
+							}
+						}
+						found = true
+						log.Printf("Retrieved original message content from immediate API call for message %s", m.ID)
+					}
+				}
+				
+				if found {
+					// Create a synthetic BeforeUpdate message
+					m.BeforeUpdate = &discordgo.Message{
+						ID:          m.ID,
+						Content:     originalContent,
+						Attachments: []*discordgo.MessageAttachment{},
+					}
+					
+					// Parse back attachments if we have them
+					if originalAttachments != "" {
+						var urls []string
+						if err := json.Unmarshal([]byte(originalAttachments), &urls); err == nil {
+							for _, url := range urls {
+								m.BeforeUpdate.Attachments = append(m.BeforeUpdate.Attachments, &discordgo.MessageAttachment{URL: url})
+							}
+						}
+					}
+					
+					// Re-process the edit with the retrieved original content
+					processMessageEdit(s, m, guildIDInt, messageID)
+				} else {
+					log.Printf("Warning: Could not retrieve original content for message %s, edit tracking skipped", m.ID)
+				}
+			}()
+			return
+		}
+
+		// Process the message edit
+		processMessageEdit(s, m, guildIDInt, messageID)
 	}
 }
 
@@ -186,4 +336,53 @@ func CloseMessageCollector() error {
 		return nil
 	}
 	return globalMessageCollector.messageDB.Close()
+}
+
+// processMessageEdit handles the actual message edit processing logic
+func processMessageEdit(s *discordgo.Session, m *discordgo.MessageUpdate, guildIDInt, messageID int64) {
+	// Extract attachment URLs from before and after
+	var previousAttachmentURLs []string
+	for _, attachment := range m.BeforeUpdate.Attachments {
+		previousAttachmentURLs = append(previousAttachmentURLs, attachment.URL)
+	}
+
+	var newAttachmentURLs []string
+	for _, attachment := range m.Attachments {
+		newAttachmentURLs = append(newAttachmentURLs, attachment.URL)
+	}
+
+	// Convert attachments to JSON strings
+	previousAttachmentsJSON := ""
+	if len(previousAttachmentURLs) > 0 {
+		if jsonData, err := json.Marshal(previousAttachmentURLs); err == nil {
+			previousAttachmentsJSON = string(jsonData)
+		}
+	}
+
+	newAttachmentsJSON := ""
+	if len(newAttachmentURLs) > 0 {
+		if jsonData, err := json.Marshal(newAttachmentURLs); err == nil {
+			newAttachmentsJSON = string(jsonData)
+		}
+	}
+
+	// Create message edit record
+	messageEdit := models.MessageEdit{
+		MessageID:           messageID,
+		GuildID:             guildIDInt,
+		EditTimestamp:       time.Now().Unix(),
+		PreviousContent:     m.BeforeUpdate.Content,
+		NewContent:          m.Content,
+		PreviousAttachments: previousAttachmentsJSON,
+		NewAttachments:      newAttachmentsJSON,
+	}
+
+	// Insert edit record and update original message
+	if err := globalMessageCollector.messageDB.InsertMessageEdit(messageEdit, m.Content, newAttachmentsJSON); err != nil {
+		log.Printf("Error recording message edit for message %d: %v", messageID, err)
+		return
+	}
+
+	// Log successful message edit tracking
+	log.Printf("Message edit tracked: Guild %s, Channel %s, Message %s", m.GuildID, m.ChannelID, m.ID)
 }
