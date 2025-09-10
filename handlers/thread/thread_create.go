@@ -33,7 +33,7 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 
 	// 加载扫描配置
 	var scanningConfig models.GuildConfig
-	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
+	if err := viper.UnmarshalKey("scanning_config."+t.GuildID, &scanningConfig); err != nil {
 		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
 		return
 	}

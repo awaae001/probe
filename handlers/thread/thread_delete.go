@@ -16,7 +16,7 @@ func ThreadDeleteHandler(s *discordgo.Session, t *discordgo.ThreadDelete) {
 	log.Printf("Thread delete event received for thread ID %s in guild %s", t.ID, t.GuildID)
 	// Load the scanning configuration for the specific guild.
 	var scanningConfig models.GuildConfig
-	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
+	if err := viper.UnmarshalKey("scanning_config."+t.GuildID, &scanningConfig); err != nil {
 		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
 		return
 	}
