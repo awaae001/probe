@@ -32,7 +32,7 @@ func NewBot() (*Bot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Discord session: %w", err)
 	}
-	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessageReactions
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessageReactions | discordgo.IntentsGuildScheduledEvents
 
 	// Initialize the logger
 	utils.InitLogger(dg)
@@ -49,6 +49,16 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 	err := b.Session.Open()
 	if err != nil {
 		return fmt.Errorf("error opening connection: %w", err)
+	}
+
+	// Set initial status to offline
+	err = b.Session.UpdateStatusComplex(discordgo.UpdateStatusData{
+		Status: string(discordgo.StatusInvisible),
+	})
+	if err != nil {
+		log.Printf("Error setting initial bot status to offline: %v", err)
+	} else {
+		log.Println("Bot status initially set to Offline.")
 	}
 
 	// Register slash commands

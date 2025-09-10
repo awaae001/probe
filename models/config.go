@@ -1,5 +1,10 @@
 package models
 
+// ScanningFileConfig represents the top-level structure of the scanning_config.json file.
+type ScanningFileConfig struct {
+	ScanningConfig ScanningConfig `json:"scanning_config" mapstructure:"scanning_config"`
+}
+
 // It's a map where keys are guild IDs.
 type ScanningConfig map[string]GuildConfig
 
@@ -19,7 +24,9 @@ type CategoryData struct {
 }
 
 // ThreadConfig represents the structure of the thread_config.json file.
-type ThreadConfig map[string]GuildThreadConfig
+type ThreadConfig struct {
+	ThreadConfig map[string]GuildThreadConfig `json:"thread_config" mapstructure:"thread_config"`
+}
 
 // GuildThreadConfig represents the configuration for a single guild's thread handling.
 type GuildThreadConfig struct {

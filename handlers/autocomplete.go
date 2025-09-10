@@ -30,11 +30,12 @@ func handleGuildAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 		return
 	}
 
-	var guilds models.ScanningConfig
-	if err := json.Unmarshal(configFile, &guilds); err != nil {
+	var fileConfig models.ScanningFileConfig
+	if err := json.Unmarshal(configFile, &fileConfig); err != nil {
 		log.Printf("Error unmarshalling config file for autocomplete: %v", err)
 		return
 	}
+	guilds := fileConfig.ScanningConfig
 
 	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(guilds))
 	for _, guild := range guilds {

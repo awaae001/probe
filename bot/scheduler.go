@@ -2,6 +2,8 @@ package bot
 
 import (
 	"log"
+	"math/rand"
+	"time"
 
 	"discord-bot/models"
 	"discord-bot/scanner"
@@ -15,54 +17,12 @@ var c *cron.Cron
 
 // getScanningConfig extracts scanning configuration from Viper.
 func getScanningConfig() models.ScanningConfig {
-	scanningConfig := make(models.ScanningConfig)
-	allSettings := viper.AllSettings()
-
-	for key, value := range allSettings {
-		if key == "db_file_path" || key == "data" {
-			continue
-		}
-
-		if configMap, ok := value.(map[string]interface{}); ok {
-			var guildConfig models.GuildConfig
-			if name, ok := configMap["name"].(string); ok {
-				guildConfig.Name = name
-			}
-			if guildsID, ok := configMap["guilds_id"].(string); ok {
-				guildConfig.GuildsID = guildsID
-			}
-			if dbPath, ok := configMap["db_path"].(string); ok {
-				guildConfig.DBPath = dbPath
-			}
-			if data, ok := configMap["data"].(map[string]interface{}); ok {
-				guildConfig.Data = make(map[string]models.CategoryData)
-				for catKey, catValue := range data {
-					if catMap, ok := catValue.(map[string]interface{}); ok {
-						var categoryData models.CategoryData
-						if categoryName, ok := catMap["category_name"].(string); ok {
-							categoryData.CategoryName = categoryName
-						}
-						if id, ok := catMap["id"].(string); ok {
-							categoryData.ID = id
-						}
-						if channelID, ok := catMap["channel_id"].([]interface{}); ok {
-							for _, chID := range channelID {
-								if chIDStr, ok := chID.(string); ok {
-									categoryData.ChannelID = append(categoryData.ChannelID, chIDStr)
-								}
-							}
-						}
-						guildConfig.Data[catKey] = categoryData
-					}
-				}
-			}
-
-			if guildConfig.Name != "" && guildConfig.GuildsID != "" && guildConfig.DBPath != "" {
-				scanningConfig[key] = guildConfig
-			}
-		}
+	var fileConfig models.ScanningFileConfig
+	if err := viper.Unmarshal(&fileConfig); err != nil {
+		log.Printf("Error unmarshalling config for scheduler: %v", err)
+		return make(models.ScanningConfig)
 	}
-	return scanningConfig
+	return fileConfig.ScanningConfig
 }
 
 // startScheduler starts the cron jobs.
@@ -70,11 +30,33 @@ func startScheduler(s *discordgo.Session) {
 	log.Println("Initializing scheduler...")
 	c = cron.New()
 	scanningConfig := getScanningConfig() // Get config once
+	rand.Seed(time.Now().UnixNano())
 
 	// Hourly scan
-	_, err := c.AddFunc("@hourly", func() {
+	_, err := c.AddFunc("@every 10m", func() {
 		log.Println("Running hourly scan...")
 		scanner.StartScanning(s, scanningConfig, false) // Incremental scan
+
+		// Set random status
+		if rand.Intn(8) == 0 { // 1/8 chance to be online
+			err := s.UpdateStatusComplex(discordgo.UpdateStatusData{
+				Status: string(discordgo.StatusOnline),
+			})
+			if err != nil {
+				log.Printf("Error setting bot status to online: %v", err)
+			} else {
+				log.Println("Bot status set to Online.")
+			}
+		} else {
+			err := s.UpdateStatusComplex(discordgo.UpdateStatusData{
+				Status: string(discordgo.StatusInvisible),
+			})
+			if err != nil {
+				log.Printf("Error setting bot status to offline: %v", err)
+			} else {
+				log.Println("Bot status set to Offline.")
+			}
+		}
 	})
 	if err != nil {
 		log.Fatalf("Could not set up cron job: %v", err)

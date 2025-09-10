@@ -59,8 +59,8 @@ func HandleScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	// Run the scanning in a goroutine.
 	go func() {
-		var fullConfig models.ScanningConfig
-		if err := viper.Unmarshal(&fullConfig); err != nil {
+		var fileConfig models.ScanningFileConfig
+		if err := viper.Unmarshal(&fileConfig); err != nil {
 			log.Printf("Error unmarshalling config for manual scan: %v", err)
 			s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Content: "Error: Could not load scanning configuration.",
@@ -68,6 +68,7 @@ func HandleScan(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			return
 		}
 
+		fullConfig := fileConfig.ScanningConfig
 		configToScan := make(models.ScanningConfig)
 		switch scanType {
 		case "guild":
