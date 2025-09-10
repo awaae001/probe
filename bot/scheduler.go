@@ -3,7 +3,6 @@ package bot
 import (
 	"log"
 	"math/rand"
-	"time"
 
 	"discord-bot/models"
 	"discord-bot/scanner"
@@ -30,15 +29,14 @@ func startScheduler(s *discordgo.Session) {
 	log.Println("Initializing scheduler...")
 	c = cron.New()
 	scanningConfig := getScanningConfig() // Get config once
-	rand.Seed(time.Now().UnixNano())
 
 	// Hourly scan
-	_, err := c.AddFunc("@every 10m", func() {
+	_, err := c.AddFunc("@every 1h", func() {
 		log.Println("Running hourly scan...")
 		scanner.StartScanning(s, scanningConfig, false) // Incremental scan
 
 		// Set random status
-		if rand.Intn(8) == 0 { // 1/8 chance to be online
+		if rand.Intn(5) == 0 { // 1/5 chance to be online
 			err := s.UpdateStatusComplex(discordgo.UpdateStatusData{
 				Status: string(discordgo.StatusOnline),
 			})

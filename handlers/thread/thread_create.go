@@ -17,11 +17,6 @@ import (
 func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	log.Printf("New thread created event received for thread ID %s in guild %s", t.ID, t.GuildID)
 	// 1. Load configurations
-	var scanningConfig models.GuildConfig
-	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
-		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
-		return
-	}
 	// 加载线程配置
 	var threadConfig models.ThreadConfig
 	if err := viper.UnmarshalKey("thread_config", &threadConfig.ThreadConfig); err != nil {
@@ -29,7 +24,21 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 		return
 	}
 
-	// 2. Check if the thread's category is monitored and the channel is not excluded.
+	// 检查服务器是否在 thread_config.json 中配置
+	guildThreadConfig, ok := threadConfig.ThreadConfig[t.GuildID]
+	if !ok {
+		log.Printf("Guild %s is not configured for thread monitoring in thread_config.json. Ignoring.", t.GuildID)
+		return
+	}
+
+	// 加载扫描配置
+	var scanningConfig models.GuildConfig
+	if err := viper.UnmarshalKey(t.GuildID, &scanningConfig); err != nil {
+		log.Printf("Error unmarshalling scanning config for guild %s: %v", t.GuildID, err)
+		return
+	}
+
+	// 2. 检查线程的分区是否被监控，以及频道是否未被排除。
 	forumChannel, err := s.Channel(t.ParentID)
 	if err != nil {
 		log.Printf("Error getting details for forum channel %s: %v", t.ParentID, err)
@@ -62,13 +71,6 @@ func ThreadCreateHandler(s *discordgo.Session, t *discordgo.ThreadCreate) {
 	}
 
 	if !isMonitored {
-		return
-	}
-
-	// 3. Get guild-specific thread config
-	guildThreadConfig, ok := threadConfig.ThreadConfig[t.GuildID]
-	if !ok {
-		log.Printf("No thread configuration found for guild %s", t.GuildID)
 		return
 	}
 
