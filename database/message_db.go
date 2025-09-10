@@ -5,6 +5,7 @@ import (
 	"discord-bot/models"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -489,8 +490,13 @@ func (mdb *MessageDB) GetMessage(messageID int64) (*models.Message, error) {
 			continue
 		}
 		
-		// Open the specific database for this timestamp
-		db, err := InitDB(dbPath)
+		// Check if database file exists before trying to open it
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			continue // Skip this guild if database doesn't exist
+		}
+		
+		// Open the specific database for this timestamp (read-only)
+		db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
 		if err != nil {
 			continue // Skip this guild if we can't open the database
 		}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"discord-bot/bot"
 	"discord-bot/database"
 	"discord-bot/models"
@@ -240,62 +241,142 @@ func MessageUpdateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 
 		// Check if BeforeUpdate is available (contains previous content)
 		if m.BeforeUpdate == nil {
-			// Try to get original content from database or immediate API call
+			// Try to get original content with priority order: immediate API call first, then database
 			go func() {
+				// 创建5秒超时的上下文
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				
 				var originalContent string
 				var originalAttachments string
 				found := false
 				
-				// First, try to get from our database
-				if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
-					originalContent = originalMessage.MessageContent
-					originalAttachments = originalMessage.Attachments
-					found = true
-					log.Printf("Retrieved original message content from database for message %s", m.ID)
-				}
+				// 使用 channel 来接收结果或超时
+				resultChan := make(chan bool, 1)
 				
-				// If not found in database, try immediate API call (before CDN updates)
-				if !found {
-					if originalMessage, err := s.ChannelMessage(m.ChannelID, m.ID); err == nil {
-						originalContent = originalMessage.Content
-						
-						// Extract attachment URLs
-						var attachmentURLs []string
-						for _, attachment := range originalMessage.Attachments {
-							attachmentURLs = append(attachmentURLs, attachment.URL)
+				go func() {
+					defer func() {
+						select {
+						case resultChan <- found:
+						default:
 						}
-						if len(attachmentURLs) > 0 {
-							if jsonData, err := json.Marshal(attachmentURLs); err == nil {
-								originalAttachments = string(jsonData)
+					}()
+					
+					// First, try immediate API call (before CDN updates)
+					if originalMessage, err := s.ChannelMessage(m.ChannelID, m.ID); err == nil {
+						apiContent := originalMessage.Content
+						
+						// Extract attachment URLs from API
+						var apiAttachmentURLs []string
+						for _, attachment := range originalMessage.Attachments {
+							apiAttachmentURLs = append(apiAttachmentURLs, attachment.URL)
+						}
+						var apiAttachments string
+						if len(apiAttachmentURLs) > 0 {
+							if jsonData, err := json.Marshal(apiAttachmentURLs); err == nil {
+								apiAttachments = string(jsonData)
 							}
 						}
-						found = true
-						log.Printf("Retrieved original message content from immediate API call for message %s", m.ID)
+						
+						// Extract current message attachments for comparison
+						var currentAttachmentURLs []string
+						for _, attachment := range m.Attachments {
+							currentAttachmentURLs = append(currentAttachmentURLs, attachment.URL)
+						}
+						var currentAttachments string
+						if len(currentAttachmentURLs) > 0 {
+							if jsonData, err := json.Marshal(currentAttachmentURLs); err == nil {
+								currentAttachments = string(jsonData)
+							}
+						}
+						
+						// Check if API content is different from current content
+						if apiContent != m.Content || apiAttachments != currentAttachments {
+							originalContent = apiContent
+							originalAttachments = apiAttachments
+							found = true
+							log.Printf("Retrieved original message content from immediate API call for message %s", m.ID)
+						} else {
+							// API content is same as current content, try database
+							log.Printf("API content same as current content, checking database for message %s", m.ID)
+							if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
+								// Check if database content is also the same as current content
+								if originalMessage.MessageContent == m.Content && originalMessage.Attachments == currentAttachments {
+									// All content is identical, set error message
+									originalContent = "错误：原始内容无法获取"
+									originalAttachments = ""
+									found = true
+									log.Printf("All content identical for message %s, using error message", m.ID)
+								} else {
+									// Database has different content, use it
+									originalContent = originalMessage.MessageContent
+									originalAttachments = originalMessage.Attachments
+									found = true
+									log.Printf("Retrieved original message content from database for message %s", m.ID)
+								}
+							} else {
+								// Database lookup failed, set error message
+								originalContent = "错误：原始内容无法获取"
+								originalAttachments = ""
+								found = true
+								log.Printf("Database lookup failed for message %s, using error message", m.ID)
+							}
+						}
+					} else {
+						// API call failed, try database
+						log.Printf("API call failed, checking database for message %s", m.ID)
+						if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
+							originalContent = originalMessage.MessageContent
+							originalAttachments = originalMessage.Attachments
+							found = true
+							log.Printf("Retrieved original message content from database for message %s", m.ID)
+						} else {
+							// Database lookup failed after API call failed, set error message
+							originalContent = "错误：原始内容无法获取"
+							originalAttachments = ""
+							found = true
+							log.Printf("Both API and database lookup failed for message %s, using error message", m.ID)
+						}
 					}
-				}
+				}()
 				
-				if found {
-					// Create a synthetic BeforeUpdate message
+				// 等待结果或超时
+				select {
+				case <-resultChan:
+					if found {
+						// Create a synthetic BeforeUpdate message
+						m.BeforeUpdate = &discordgo.Message{
+							ID:          m.ID,
+							Content:     originalContent,
+							Attachments: []*discordgo.MessageAttachment{},
+						}
+						
+						// Parse back attachments if we have them
+						if originalAttachments != "" {
+							var urls []string
+							if err := json.Unmarshal([]byte(originalAttachments), &urls); err == nil {
+								for _, url := range urls {
+									m.BeforeUpdate.Attachments = append(m.BeforeUpdate.Attachments, &discordgo.MessageAttachment{URL: url})
+								}
+							}
+						}
+						
+						// Re-process the edit with the retrieved original content
+						processMessageEdit(s, m, guildIDInt, messageID)
+					}
+				case <-ctx.Done():
+					// 超时处理
+					log.Printf("消息内容获取超时 (5秒): Guild %s, Message %s", m.GuildID, m.ID)
+					
+					// 创建带有超时错误信息的 BeforeUpdate
 					m.BeforeUpdate = &discordgo.Message{
 						ID:          m.ID,
-						Content:     originalContent,
+						Content:     "错误：获取超时",
 						Attachments: []*discordgo.MessageAttachment{},
 					}
 					
-					// Parse back attachments if we have them
-					if originalAttachments != "" {
-						var urls []string
-						if err := json.Unmarshal([]byte(originalAttachments), &urls); err == nil {
-							for _, url := range urls {
-								m.BeforeUpdate.Attachments = append(m.BeforeUpdate.Attachments, &discordgo.MessageAttachment{URL: url})
-							}
-						}
-					}
-					
-					// Re-process the edit with the retrieved original content
+					// 处理超时情况下的编辑记录
 					processMessageEdit(s, m, guildIDInt, messageID)
-				} else {
-					log.Printf("Warning: Could not retrieve original content for message %s, edit tracking skipped", m.ID)
 				}
 			}()
 			return
