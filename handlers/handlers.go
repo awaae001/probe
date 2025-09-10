@@ -10,10 +10,16 @@ import (
 
 // Register all handlers to the bot.
 func Register(b *bot.Bot) {
+	// Initialize message collector
+	if err := InitMessageCollector(); err != nil {
+		log.Printf("Failed to initialize message collector: %v", err)
+	}
+
 	// Register event handlers
 	b.Session.AddHandler(InteractionCreate(b))
 	b.Session.AddHandler(thread.ThreadCreateHandler)
 	b.Session.AddHandler(thread.ThreadDeleteHandler)
+	b.Session.AddHandler(MessageCreateHandler(b))
 	// b.Session.AddHandler(MemberAddHandler)
 	// b.Session.AddHandler(MemberRemoveHandler)
 	// b.Session.AddHandler(MemberUpdateHandler)

@@ -78,4 +78,17 @@ func LoadConfig() {
 			panic(fmt.Errorf("合并新人加入扫描配置文件时发生致命错误: %w", err))
 		}
 	}
+
+	// 5. 合并消息抓取配置文件 (config/message_init.json)
+	viper.SetConfigName("message_init")
+	viper.SetConfigType("json")
+	viper.AddConfigPath("./config")
+
+	if err := viper.MergeInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			log.Printf("未找到消息抓取配置文件 (config/message_init.json)，将跳过合并。")
+		} else {
+			panic(fmt.Errorf("合并消息抓取配置文件时发生致命错误: %w", err))
+		}
+	}
 }
