@@ -61,41 +61,6 @@ func CreateMessagesTable(db *sql.DB) error {
 	return nil
 }
 
-// CreateMessageEditsTable creates the message_edits table if it doesn't exist
-func CreateMessageEditsTable(db *sql.DB) error {
-	query := `
-    CREATE TABLE IF NOT EXISTS message_edits (
-        edit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        message_id INTEGER NOT NULL,
-        guild_id INTEGER NOT NULL,
-        edit_timestamp INTEGER NOT NULL,
-        previous_content TEXT NOT NULL,
-        new_content TEXT NOT NULL,
-        previous_attachments TEXT DEFAULT '',
-        new_attachments TEXT DEFAULT '',
-        FOREIGN KEY (message_id) REFERENCES messages(message_id)
-    );`
-
-	if _, err := db.Exec(query); err != nil {
-		return fmt.Errorf("failed to create message_edits table: %w", err)
-	}
-
-	// Create indexes for better query performance
-	indexes := []string{
-		"CREATE INDEX IF NOT EXISTS idx_message_edits_message_id ON message_edits(message_id);",
-		"CREATE INDEX IF NOT EXISTS idx_message_edits_timestamp ON message_edits(edit_timestamp);",
-		"CREATE INDEX IF NOT EXISTS idx_message_edits_guild_timestamp ON message_edits(guild_id, edit_timestamp);",
-	}
-
-	for _, indexQuery := range indexes {
-		if _, err := db.Exec(indexQuery); err != nil {
-			log.Printf("Warning: failed to create index: %v", err)
-		}
-	}
-
-	log.Println("Message edits table and indexes created successfully")
-	return nil
-}
 
 // CreateMessageDeletionsTable creates the message_deletions table if it doesn't exist
 func CreateMessageDeletionsTable(db *sql.DB) error {
@@ -126,6 +91,42 @@ func CreateMessageDeletionsTable(db *sql.DB) error {
 	}
 
 	log.Println("Message deletions table and indexes created successfully")
+	return nil
+}
+
+// CreateMessageEditsTable creates the message_edits table if it doesn't exist
+func CreateMessageEditsTable(db *sql.DB) error {
+	query := `
+    CREATE TABLE IF NOT EXISTS message_edits (
+        edit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        guild_id INTEGER NOT NULL,
+        channel_id INTEGER NOT NULL,
+        original_content TEXT DEFAULT '',
+        edited_content TEXT NOT NULL,
+        original_attachments TEXT DEFAULT '',
+        edited_attachments TEXT DEFAULT '',
+        edit_timestamp INTEGER NOT NULL
+    );`
+
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("failed to create message_edits table: %w", err)
+	}
+
+	// Create indexes for better query performance
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_message_edits_message_id ON message_edits(message_id);",
+		"CREATE INDEX IF NOT EXISTS idx_message_edits_guild_timestamp ON message_edits(guild_id, edit_timestamp);",
+		"CREATE INDEX IF NOT EXISTS idx_message_edits_channel_timestamp ON message_edits(channel_id, edit_timestamp);",
+	}
+
+	for _, indexQuery := range indexes {
+		if _, err := db.Exec(indexQuery); err != nil {
+			log.Printf("Warning: failed to create index: %v", err)
+		}
+	}
+
+	log.Println("Message edits table and indexes created successfully")
 	return nil
 }
 
@@ -231,12 +232,12 @@ func (mdb *MessageDB) GetDB(guildID string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	if err := CreateMessageEditsTable(db); err != nil {
+	if err := CreateMessageDeletionsTable(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	if err := CreateMessageDeletionsTable(db); err != nil {
+	if err := CreateMessageEditsTable(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -398,72 +399,6 @@ func (mdb *MessageDB) GetMessageCount(guildID int64) (int64, error) {
 }
 
 
-// InsertMessageEdit inserts a message edit history record and updates the original message
-func (mdb *MessageDB) InsertMessageEdit(edit models.MessageEdit, newContent, newAttachments string) error {
-	guildIDStr := fmt.Sprintf("%d", edit.GuildID)
-	
-	// Get the correct database path based on the message timestamp
-	dbPath, err := mdb.GetDBPathByTimestamp(guildIDStr, edit.EditTimestamp)
-	if err != nil {
-		return fmt.Errorf("failed to get database path for timestamp %d: %w", edit.EditTimestamp, err)
-	}
-
-	// Open the specific database for this timestamp
-	db, err := InitDB(dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database at %s: %w", dbPath, err)
-	}
-	defer db.Close()
-
-	// Ensure both tables exist
-	if err := CreateMessagesTable(db); err != nil {
-		log.Printf("Warning: failed to ensure messages table exists: %v", err)
-	}
-	if err := CreateMessageEditsTable(db); err != nil {
-		log.Printf("Warning: failed to ensure message_edits table exists: %v", err)
-	}
-
-	// Start transaction
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Insert edit history record
-	editQuery := `INSERT INTO message_edits (message_id, guild_id, edit_timestamp, previous_content, new_content, previous_attachments, new_attachments) 
-	              VALUES (?, ?, ?, ?, ?, ?, ?)`
-	
-	_, err = tx.Exec(editQuery, edit.MessageID, edit.GuildID, edit.EditTimestamp, 
-		edit.PreviousContent, edit.NewContent, edit.PreviousAttachments, edit.NewAttachments)
-	if err != nil {
-		return fmt.Errorf("failed to insert message edit record: %w", err)
-	}
-
-	// Update original message with new content and set is_edited = TRUE
-	updateQuery := `UPDATE messages SET message_content = ?, attachments = ?, is_edited = TRUE 
-	                WHERE message_id = ? AND guild_id = ?`
-	
-	result, err := tx.Exec(updateQuery, newContent, newAttachments, edit.MessageID, edit.GuildID)
-	if err != nil {
-		return fmt.Errorf("failed to update original message: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		log.Printf("Warning: could not get affected rows count: %v", err)
-	} else if rowsAffected == 0 {
-		log.Printf("Warning: original message %d not found for update in guild %d", edit.MessageID, edit.GuildID)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	log.Printf("Successfully recorded message edit: Message %d in guild %d", edit.MessageID, edit.GuildID)
-	return nil
-}
 
 // extractTimestampFromDiscordID extracts timestamp from Discord snowflake ID
 func extractTimestampFromDiscordID(id int64) int64 {
@@ -548,5 +483,32 @@ func (mdb *MessageDB) InsertMessageDeletion(deletion models.MessageDeletion) err
 	}
 
 	log.Printf("Message deletion recorded: Guild %d, Message %d", deletion.GuildID, deletion.MessageID)
+	return nil
+}
+
+// InsertMessageEdit records a message edit event
+func (mdb *MessageDB) InsertMessageEdit(edit models.MessageEdit) error {
+	guildIDStr := fmt.Sprintf("%d", edit.GuildID)
+	db, err := mdb.GetDB(guildIDStr)
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	// Insert the edit record
+	query := `INSERT INTO message_edits (message_id, guild_id, channel_id, original_content, edited_content, original_attachments, edited_attachments, edit_timestamp) 
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare edit insert statement: %w", err)
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(edit.MessageID, edit.GuildID, edit.ChannelID, edit.OriginalContent, edit.EditedContent, edit.OriginalAttachments, edit.EditedAttachments, edit.EditTimestamp)
+	if err != nil {
+		return fmt.Errorf("failed to insert message edit %d: %w", edit.MessageID, err)
+	}
+
+	log.Printf("Message edit recorded: Guild %d, Message %d", edit.GuildID, edit.MessageID)
 	return nil
 }

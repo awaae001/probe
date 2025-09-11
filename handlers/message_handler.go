@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"discord-bot/bot"
 	"discord-bot/database"
 	"discord-bot/models"
@@ -10,6 +9,7 @@ import (
 	"log"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -24,6 +24,14 @@ type MessageCollector struct {
 }
 
 var globalMessageCollector *MessageCollector
+
+// 用于防止重复处理消息编辑事件
+var (
+	recentEdits    = make(map[int64]time.Time)
+	editsMutex     sync.RWMutex
+	lastCleanup    time.Time
+	cleanupMutex   sync.Mutex
+)
 
 // validateGuildAndChannel checks if message collection is enabled for the guild and channel
 func validateGuildAndChannel(guildID, channelID string) (models.GuildMsgConfig, bool) {
@@ -95,7 +103,6 @@ func InitMessageCollector() error {
 
 	messageDB := database.NewMessageDB(config)
 	statusManager := database.NewStatusManager(config.MessageListener.DBStatus)
-	
 	globalMessageCollector = &MessageCollector{
 		messageDB:     messageDB,
 		statusManager: statusManager,
@@ -132,7 +139,7 @@ func MessageCreateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 		for _, attachment := range m.Attachments {
 			attachmentURLs = append(attachmentURLs, attachment.URL)
 		}
-		
+
 		// Convert attachments to JSON string
 		attachmentsJSON := ""
 		if len(attachmentURLs) > 0 {
@@ -218,174 +225,6 @@ func MessageDeleteHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.Me
 	}
 }
 
-// MessageUpdateHandler handles Discord message update events
-func MessageUpdateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.MessageUpdate) {
-	return func(s *discordgo.Session, m *discordgo.MessageUpdate) {
-		// Skip bot messages
-		if m.Author != nil && m.Author.Bot {
-			return
-		}
-
-		// Validate guild and channel
-		_, valid := validateGuildAndChannel(m.GuildID, m.ChannelID)
-		if !valid {
-			return
-		}
-
-		// Convert Discord IDs to int64 (using empty string for userID since it may not be available in updates)
-		messageID, _, guildIDInt, _, err := parseDiscordIDs(m.ID, "", m.GuildID, m.ChannelID)
-		if err != nil {
-			log.Printf("%v", err)
-			return
-		}
-
-		// Check if BeforeUpdate is available (contains previous content)
-		if m.BeforeUpdate == nil {
-			// Try to get original content with priority order: immediate API call first, then database
-			go func() {
-				// 创建5秒超时的上下文
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				
-				var originalContent string
-				var originalAttachments string
-				found := false
-				
-				// 使用 channel 来接收结果或超时
-				resultChan := make(chan bool, 1)
-				
-				go func() {
-					defer func() {
-						select {
-						case resultChan <- found:
-						default:
-						}
-					}()
-					
-					// First, try immediate API call (before CDN updates)
-					if originalMessage, err := s.ChannelMessage(m.ChannelID, m.ID); err == nil {
-						apiContent := originalMessage.Content
-						
-						// Extract attachment URLs from API
-						var apiAttachmentURLs []string
-						for _, attachment := range originalMessage.Attachments {
-							apiAttachmentURLs = append(apiAttachmentURLs, attachment.URL)
-						}
-						var apiAttachments string
-						if len(apiAttachmentURLs) > 0 {
-							if jsonData, err := json.Marshal(apiAttachmentURLs); err == nil {
-								apiAttachments = string(jsonData)
-							}
-						}
-						
-						// Extract current message attachments for comparison
-						var currentAttachmentURLs []string
-						for _, attachment := range m.Attachments {
-							currentAttachmentURLs = append(currentAttachmentURLs, attachment.URL)
-						}
-						var currentAttachments string
-						if len(currentAttachmentURLs) > 0 {
-							if jsonData, err := json.Marshal(currentAttachmentURLs); err == nil {
-								currentAttachments = string(jsonData)
-							}
-						}
-						
-						// Check if API content is different from current content
-						if apiContent != m.Content || apiAttachments != currentAttachments {
-							originalContent = apiContent
-							originalAttachments = apiAttachments
-							found = true
-							log.Printf("Retrieved original message content from immediate API call for message %s", m.ID)
-						} else {
-							// API content is same as current content, try database
-							log.Printf("API content same as current content, checking database for message %s", m.ID)
-							if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
-								// Check if database content is also the same as current content
-								if originalMessage.MessageContent == m.Content && originalMessage.Attachments == currentAttachments {
-									// All content is identical, set error message
-									originalContent = "错误：原始内容无法获取"
-									originalAttachments = ""
-									found = true
-									log.Printf("All content identical for message %s, using error message", m.ID)
-								} else {
-									// Database has different content, use it
-									originalContent = originalMessage.MessageContent
-									originalAttachments = originalMessage.Attachments
-									found = true
-									log.Printf("Retrieved original message content from database for message %s", m.ID)
-								}
-							} else {
-								// Database lookup failed, set error message
-								originalContent = "错误：原始内容无法获取"
-								originalAttachments = ""
-								found = true
-								log.Printf("Database lookup failed for message %s, using error message", m.ID)
-							}
-						}
-					} else {
-						// API call failed, try database
-						log.Printf("API call failed, checking database for message %s", m.ID)
-						if originalMessage, err := globalMessageCollector.messageDB.GetMessage(messageID); err == nil {
-							originalContent = originalMessage.MessageContent
-							originalAttachments = originalMessage.Attachments
-							found = true
-							log.Printf("Retrieved original message content from database for message %s", m.ID)
-						} else {
-							// Database lookup failed after API call failed, set error message
-							originalContent = "错误：原始内容无法获取"
-							originalAttachments = ""
-							found = true
-							log.Printf("Both API and database lookup failed for message %s, using error message", m.ID)
-						}
-					}
-				}()
-				
-				// 等待结果或超时
-				select {
-				case <-resultChan:
-					if found {
-						// Create a synthetic BeforeUpdate message
-						m.BeforeUpdate = &discordgo.Message{
-							ID:          m.ID,
-							Content:     originalContent,
-							Attachments: []*discordgo.MessageAttachment{},
-						}
-						
-						// Parse back attachments if we have them
-						if originalAttachments != "" {
-							var urls []string
-							if err := json.Unmarshal([]byte(originalAttachments), &urls); err == nil {
-								for _, url := range urls {
-									m.BeforeUpdate.Attachments = append(m.BeforeUpdate.Attachments, &discordgo.MessageAttachment{URL: url})
-								}
-							}
-						}
-						
-						// Re-process the edit with the retrieved original content
-						processMessageEdit(s, m, guildIDInt, messageID)
-					}
-				case <-ctx.Done():
-					// 超时处理
-					log.Printf("消息内容获取超时 (5秒): Guild %s, Message %s", m.GuildID, m.ID)
-					
-					// 创建带有超时错误信息的 BeforeUpdate
-					m.BeforeUpdate = &discordgo.Message{
-						ID:          m.ID,
-						Content:     "错误：获取超时",
-						Attachments: []*discordgo.MessageAttachment{},
-					}
-					
-					// 处理超时情况下的编辑记录
-					processMessageEdit(s, m, guildIDInt, messageID)
-				}
-			}()
-			return
-		}
-
-		// Process the message edit
-		processMessageEdit(s, m, guildIDInt, messageID)
-	}
-}
 
 // GetChannelStats retrieves channel statistics for a guild
 func GetChannelStats(guildID int64, from, to *time.Time) ([]models.ChannelStat, error) {
@@ -419,51 +258,145 @@ func CloseMessageCollector() error {
 	return globalMessageCollector.messageDB.Close()
 }
 
-// processMessageEdit handles the actual message edit processing logic
-func processMessageEdit(s *discordgo.Session, m *discordgo.MessageUpdate, guildIDInt, messageID int64) {
-	// Extract attachment URLs from before and after
-	var previousAttachmentURLs []string
-	for _, attachment := range m.BeforeUpdate.Attachments {
-		previousAttachmentURLs = append(previousAttachmentURLs, attachment.URL)
-	}
-
-	var newAttachmentURLs []string
-	for _, attachment := range m.Attachments {
-		newAttachmentURLs = append(newAttachmentURLs, attachment.URL)
-	}
-
-	// Convert attachments to JSON strings
-	previousAttachmentsJSON := ""
-	if len(previousAttachmentURLs) > 0 {
-		if jsonData, err := json.Marshal(previousAttachmentURLs); err == nil {
-			previousAttachmentsJSON = string(jsonData)
+// MessageUpdateHandler 处理 Discord 消息编辑事件
+func MessageUpdateHandler(b *bot.Bot) func(s *discordgo.Session, m *discordgo.MessageUpdate) {
+	return func(s *discordgo.Session, m *discordgo.MessageUpdate) {
+		// 跳过机器人消息
+		if m.Author != nil && m.Author.Bot {
+			return
 		}
-	}
 
-	newAttachmentsJSON := ""
-	if len(newAttachmentURLs) > 0 {
-		if jsonData, err := json.Marshal(newAttachmentURLs); err == nil {
-			newAttachmentsJSON = string(jsonData)
+		// 验证服务器和频道
+		_, valid := validateGuildAndChannel(m.GuildID, m.ChannelID)
+		if !valid {
+			return
 		}
-	}
 
-	// Create message edit record
-	messageEdit := models.MessageEdit{
-		MessageID:           messageID,
-		GuildID:             guildIDInt,
-		EditTimestamp:       time.Now().Unix(),
-		PreviousContent:     m.BeforeUpdate.Content,
-		NewContent:          m.Content,
-		PreviousAttachments: previousAttachmentsJSON,
-		NewAttachments:      newAttachmentsJSON,
-	}
+		// 转换 Discord ID 为 int64
+		messageID, _, guildIDInt, channelID, err := parseDiscordIDs(m.ID, "", m.GuildID, m.ChannelID)
+		if err != nil {
+			log.Printf("%v", err)
+			return
+		}
 
-	// Insert edit record and update original message
-	if err := globalMessageCollector.messageDB.InsertMessageEdit(messageEdit, m.Content, newAttachmentsJSON); err != nil {
-		log.Printf("Error recording message edit for message %d: %v", messageID, err)
-		return
-	}
+		// 检查是否在最近5秒内已经处理过这条消息的编辑事件
+		editsMutex.RLock()
+		if lastEdit, exists := recentEdits[messageID]; exists {
+			if time.Since(lastEdit) < 5*time.Second {
+				editsMutex.RUnlock()
+				log.Printf("跳过重复的消息编辑事件 - 消息ID: %d", messageID)
+				return
+			}
+		}
+		editsMutex.RUnlock()
 
-	// Log successful message edit tracking
-	log.Printf("Message edit tracked: Guild %s, Channel %s, Message %s", m.GuildID, m.ChannelID, m.ID)
+		// 记录这次编辑处理
+		editsMutex.Lock()
+		recentEdits[messageID] = time.Now()
+		editsMutex.Unlock()
+
+		// 定期清理旧记录（每60秒清理一次）
+		cleanupMutex.Lock()
+		if time.Since(lastCleanup) > 60*time.Second {
+			go func() {
+				defer cleanupMutex.Unlock()
+				editsMutex.Lock()
+				for id, timestamp := range recentEdits {
+					if time.Since(timestamp) > 30*time.Second {
+						delete(recentEdits, id)
+					}
+				}
+				editsMutex.Unlock()
+				lastCleanup = time.Now()
+			}()
+		} else {
+			cleanupMutex.Unlock()
+		}
+
+		// 提取编辑后的内容和媒体
+		editedContent := m.Content
+
+		var editedAttachmentURLs []string
+		for _, attachment := range m.Attachments {
+			editedAttachmentURLs = append(editedAttachmentURLs, attachment.URL)
+		}
+
+		editedAttachmentsJSON := ""
+		if len(editedAttachmentURLs) > 0 {
+			if jsonData, err := json.Marshal(editedAttachmentURLs); err == nil {
+				editedAttachmentsJSON = string(jsonData)
+			}
+		}
+
+		// 尝试获取原始内容
+		originalContent, originalAttachments := getOriginalMessageContent(s, messageID, m.ChannelID, editedContent, editedAttachmentsJSON)
+
+		// 创建消息编辑记录
+		edit := models.MessageEdit{
+			MessageID:           messageID,
+			GuildID:             guildIDInt,
+			ChannelID:           channelID,
+			OriginalContent:     originalContent,
+			EditedContent:       editedContent,
+			OriginalAttachments: originalAttachments,
+			EditedAttachments:   editedAttachmentsJSON,
+			EditTimestamp:       time.Now().Unix(),
+		}
+
+		// 将编辑记录插入数据库
+		if err := globalMessageCollector.messageDB.InsertMessageEdit(edit); err != nil {
+			log.Printf("插入消息编辑记录失败 %d: %v", messageID, err)
+			return
+		}
+
+		// 记录成功的消息编辑跟踪
+		log.Printf("消息编辑已跟踪: 服务器 %s, 频道 %s, 消息 %s", m.GuildID, m.ChannelID, m.ID)
+	}
 }
+
+// getOriginalMessageContent 尝试获取原始消息内容
+// 首先尝试从 Discord API 获取，如果内容与编辑后内容相同则查数据库
+func getOriginalMessageContent(s *discordgo.Session, messageID int64, channelID, editedContent, editedAttachments string) (string, string) {
+	// 首先立刻尝试从 Discord API 获取原始消息（CDN 刷新前）
+	discordMessage, err := s.ChannelMessage(channelID, fmt.Sprintf("%d", messageID))
+	if err == nil && discordMessage != nil {
+		// 将 API 获取的媒体转换为 JSON 格式以便比较
+		var apiAttachmentURLs []string
+		for _, attachment := range discordMessage.Attachments {
+			apiAttachmentURLs = append(apiAttachmentURLs, attachment.URL)
+		}
+
+		apiAttachmentsJSON := ""
+		if len(apiAttachmentURLs) > 0 {
+			if jsonData, err := json.Marshal(apiAttachmentURLs); err == nil {
+				apiAttachmentsJSON = string(jsonData)
+			}
+		}
+
+		// 如果 API 获取的内容和编辑后内容相同，说明 CDN 已刷新，需要查数据库
+		if discordMessage.Content == editedContent && apiAttachmentsJSON == editedAttachments {
+			log.Printf("API 内容与编辑后内容相同，尝试从数据库获取原始内容 - 消息ID: %d", messageID)
+			
+			// 查数据库获取原始内容
+			if globalMessageCollector != nil {
+				if originalMessage, dbErr := globalMessageCollector.messageDB.GetMessage(messageID); dbErr == nil && originalMessage != nil {
+					log.Printf("从数据库成功获取原始内容 - 消息ID: %d", messageID)
+					return originalMessage.MessageContent, originalMessage.Attachments
+				} else {
+					log.Printf("数据库查询失败或未找到原始内容 - 消息ID: %d, 错误: %v", messageID, dbErr)
+				}
+			}
+		} else {
+			// API 内容与编辑后内容不同，说明 API 还有原始内容
+			log.Printf("从 API 获取到原始内容 - 消息ID: %d", messageID)
+			return discordMessage.Content, apiAttachmentsJSON
+		}
+	} else {
+		log.Printf("Discord API 获取消息失败 - 消息ID: %d, 错误: %v", messageID, err)
+	}
+
+	// 无法获取原始内容，只记录编辑后的内容
+	log.Printf("无法获取消息 %d 的原始内容，原始内容留空", messageID)
+	return "", ""
+}
+
