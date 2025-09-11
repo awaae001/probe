@@ -1,5 +1,3 @@
-package database
-
 import (
 	"database/sql"
 	"discord-bot/models"
@@ -60,7 +58,6 @@ func CreateMessagesTable(db *sql.DB) error {
 	log.Println("Messages table and indexes created successfully")
 	return nil
 }
-
 
 // CreateMessageDeletionsTable creates the message_deletions table if it doesn't exist
 func CreateMessageDeletionsTable(db *sql.DB) error {
@@ -398,14 +395,12 @@ func (mdb *MessageDB) GetMessageCount(guildID int64) (int64, error) {
 	return count, nil
 }
 
-
-
 // extractTimestampFromDiscordID extracts timestamp from Discord snowflake ID
 func extractTimestampFromDiscordID(id int64) int64 {
 	// Discord snowflake format: (timestamp - 1420070400000) << 22 | worker_id << 17 | process_id << 12 | increment
 	// Discord epoch: January 1, 2015, or 1420070400000 milliseconds since Unix epoch
 	const discordEpoch = 1420070400000
-	
+
 	// Extract timestamp by shifting right 22 bits and adding Discord epoch
 	timestampMs := (id >> 22) + discordEpoch
 	return timestampMs / 1000 // Convert to Unix timestamp
@@ -415,7 +410,7 @@ func extractTimestampFromDiscordID(id int64) int64 {
 func (mdb *MessageDB) GetMessage(messageID int64) (*models.Message, error) {
 	// Extract timestamp from Discord ID to determine which database to check
 	timestamp := extractTimestampFromDiscordID(messageID)
-	
+
 	// Get all guild configurations to search across guilds
 	for guildID := range mdb.config.MessageListener.Data {
 		// Get database path based on the extracted timestamp
@@ -424,37 +419,37 @@ func (mdb *MessageDB) GetMessage(messageID int64) (*models.Message, error) {
 			log.Printf("Failed to get DB path for guild %s and timestamp %d: %v", guildID, timestamp, err)
 			continue
 		}
-		
+
 		// Check if database file exists before trying to open it
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 			continue // Skip this guild if database doesn't exist
 		}
-		
+
 		// Open the specific database for this timestamp (read-only)
 		db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
 		if err != nil {
 			continue // Skip this guild if we can't open the database
 		}
 		defer db.Close()
-		
+
 		query := `SELECT message_id, user_id, guild_id, channel_id, timestamp, message_content, attachments, is_edited 
 		          FROM messages WHERE message_id = ?`
-		
+
 		var msg models.Message
 		err = db.QueryRow(query, messageID).Scan(
 			&msg.MessageID, &msg.UserID, &msg.GuildID, &msg.ChannelID,
 			&msg.Timestamp, &msg.MessageContent, &msg.Attachments, &msg.IsEdited,
 		)
-		
+
 		if err == nil {
 			return &msg, nil // Found the message
 		}
-		
+
 		if err != sql.ErrNoRows {
 			log.Printf("Error querying message %d in guild %s database %s: %v", messageID, guildID, dbPath, err)
 		}
 	}
-	
+
 	// Message not found in any database
 	return nil, fmt.Errorf("message %d not found in any database", messageID)
 }

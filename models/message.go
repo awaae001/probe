@@ -1,7 +1,5 @@
 package models
 
-import "time"
-
 // MessageConfig represents the message_init.json configuration structure
 type MessageConfig struct {
 	MessageListener MessageListener `json:"message_listener" mapstructure:"message_listener"`
@@ -33,7 +31,6 @@ type Message struct {
 	IsEdited       bool   `json:"is_edited"`   // Flag indicating if the message was edited
 }
 
-
 // ChannelStat represents channel message statistics
 type ChannelStat struct {
 	ChannelID    int64 `json:"channel_id"`
@@ -57,29 +54,13 @@ type MessageDeletion struct {
 
 // MessageEdit represents a message edit record
 type MessageEdit struct {
-	EditID              int64  `json:"edit_id"`               // Auto-increment ID for each edit
-	MessageID           int64  `json:"message_id"`            // ID of the edited message
-	GuildID             int64  `json:"guild_id"`              // Guild ID where the message was edited
-	ChannelID           int64  `json:"channel_id"`            // Channel ID where the message was edited
-	OriginalContent     string `json:"original_content"`      // Original message content
-	EditedContent       string `json:"edited_content"`        // Edited message content
-	OriginalAttachments string `json:"original_attachments"`  // JSON array of original attachment URLs
-	EditedAttachments   string `json:"edited_attachments"`    // JSON array of edited attachment URLs
-	EditTimestamp       int64  `json:"edit_timestamp"`        // Timestamp when the edit occurred
-}
-
-// DatabaseStatus represents the structure of db_status.json
-type DatabaseStatus struct {
-	CurrentDatabases []DatabaseInfo `json:"current_databases"`
-	TotalDatabases   int            `json:"total_databases"`
-	LastUpdated      time.Time      `json:"last_updated"`
-}
-
-// DatabaseInfo represents information about an active database
-type DatabaseInfo struct {
-	GuildID      string    `json:"guild_id"`
-	DBFile       string    `json:"db_file"`
-	CreatedAt    time.Time `json:"created_at"`
-	MessageCount int64     `json:"message_count"`
-	LastMessage  time.Time `json:"last_message"`
+	EditID              int64  `json:"edit_id"`              // Auto-increment ID for each edit
+	MessageID           int64  `json:"message_id"`           // ID of the edited message
+	GuildID             int64  `json:"guild_id"`             // Guild ID where the message was edited
+	ChannelID           int64  `json:"channel_id"`           // Channel ID where the message was edited
+	OriginalContent     string `json:"original_content"`     // Original message content
+	EditedContent       string `json:"edited_content"`       // Edited message content
+	OriginalAttachments string `json:"original_attachments"` // JSON array of original attachment URLs
+	EditedAttachments   string `json:"edited_attachments"`   // JSON array of edited attachment URLs
+	EditTimestamp       int64  `json:"edit_timestamp"`       // Timestamp when the edit occurred
 }

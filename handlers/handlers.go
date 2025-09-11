@@ -11,7 +11,7 @@ import (
 // Register all handlers to the bot.
 func Register(b *bot.Bot) {
 	// Initialize message collector
-	if err := InitMessageCollector(); err != nil {
+	if err := InitMessageCollector("config/message_listener.json"); err != nil {
 		log.Printf("Failed to initialize message collector: %v", err)
 	}
 
