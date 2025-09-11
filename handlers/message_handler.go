@@ -2,12 +2,12 @@ package handlers
 
 import (
 	"discord-bot/bot"
-	"discord-bot/database"
+	database "discord-bot/database/message"
 	"discord-bot/handlers/message"
 	"discord-bot/models"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -36,7 +36,7 @@ func InitMessageCollector(configPath string) error {
 		}
 		defer file.Close()
 
-		bytes, readErr := ioutil.ReadAll(file)
+		bytes, readErr := io.ReadAll(file)
 		if readErr != nil {
 			err = fmt.Errorf("failed to read message listener config: %w", readErr)
 			return
@@ -54,7 +54,6 @@ func InitMessageCollector(configPath string) error {
 		}
 
 		statusManager := database.NewStatusManager(config.DBStatus)
-
 		for _, mode := range config.GloabMode {
 			switch mode {
 			case "base":
