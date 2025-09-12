@@ -1,6 +1,7 @@
 package message
 
 import (
+	"context"
 	"discord-bot/database/message/plusdb"
 	"discord-bot/models"
 	"fmt"
@@ -14,12 +15,22 @@ import (
 
 // PlusHandler handles message events for the "plus" mode, including complex edit handling.
 type PlusHandler struct {
-	db           *plusdb.PlusDB
-	config       models.PlusGuildConfig
-	recentEdits  map[int64]time.Time
-	editsMutex   sync.RWMutex
-	lastCleanup  time.Time
-	cleanupMutex sync.Mutex
+	db                *plusdb.PlusDB
+	config            models.PlusGuildConfig
+	ctx               context.Context      // 控制goroutine生命周期
+	cancel            context.CancelFunc   // 取消函数
+	recentEdits       map[int64]time.Time
+	recentMessages    map[int64]time.Time  // 防止重复消息创建
+	recentDeletions   map[int64]time.Time  // 防止重复删除事件
+	editsMutex        sync.RWMutex
+	messagesMutex     sync.RWMutex         // 保护 recentMessages
+	deletionsMutex    sync.RWMutex         // 保护 recentDeletions
+	lastCleanup       time.Time
+	lastMsgCleanup    time.Time            // 消息清理时间戳
+	lastDelCleanup    time.Time            // 删除清理时间戳
+	cleanupMutex      sync.Mutex
+	msgCleanupMutex   sync.Mutex           // 消息清理互斥锁
+	delCleanupMutex   sync.Mutex           // 删除清理互斥锁
 }
 
 // NewPlusHandler creates a new handler for the plus mode.
@@ -28,10 +39,17 @@ func NewPlusHandler(config models.PlusGuildConfig) (*PlusHandler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize plusDB for guild %s: %w", config.GuildsID, err)
 	}
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	
 	return &PlusHandler{
-		db:          db,
-		config:      config,
-		recentEdits: make(map[int64]time.Time),
+		db:              db,
+		config:          config,
+		ctx:             ctx,
+		cancel:          cancel,
+		recentEdits:     make(map[int64]time.Time),
+		recentMessages:  make(map[int64]time.Time),
+		recentDeletions: make(map[int64]time.Time),
 	}, nil
 }
 
@@ -45,6 +63,46 @@ func (h *PlusHandler) HandleCreate(s *discordgo.Session, m *discordgo.MessageCre
 	if err != nil {
 		log.Printf("PlusHandler: Error parsing IDs: %v", err)
 		return
+	}
+
+	// 防止重复处理消息创建事件（检查是否在最近3秒内已处理过）
+	h.messagesMutex.RLock()
+	if lastMsg, exists := h.recentMessages[messageID]; exists && time.Since(lastMsg) < 3*time.Second {
+		h.messagesMutex.RUnlock()
+		log.Printf("PlusHandler: 跳过重复的消息创建事件 - 消息ID: %d", messageID)
+		return
+	}
+	h.messagesMutex.RUnlock()
+
+	// 记录这次消息处理
+	h.messagesMutex.Lock()
+	h.recentMessages[messageID] = time.Now()
+	h.messagesMutex.Unlock()
+
+	// 定期清理旧的消息记录（每60秒清理一次）
+	h.msgCleanupMutex.Lock()
+	if time.Since(h.lastMsgCleanup) > 60*time.Second {
+		go func() {
+			defer h.msgCleanupMutex.Unlock()
+			
+			// 检查context是否已取消
+			select {
+			case <-h.ctx.Done():
+				return
+			default:
+			}
+			
+			h.messagesMutex.Lock()
+			for id, timestamp := range h.recentMessages {
+				if time.Since(timestamp) > 30*time.Second {
+					delete(h.recentMessages, id)
+				}
+			}
+			h.messagesMutex.Unlock()
+			h.lastMsgCleanup = time.Now()
+		}()
+	} else {
+		h.msgCleanupMutex.Unlock()
 	}
 
 	attachmentsJSON := getAttachmentsJSON(m.Attachments)
@@ -93,6 +151,14 @@ func (h *PlusHandler) HandleUpdate(s *discordgo.Session, m *discordgo.MessageUpd
 	if time.Since(h.lastCleanup) > 60*time.Second {
 		go func() {
 			defer h.cleanupMutex.Unlock()
+			
+			// 检查context是否已取消
+			select {
+			case <-h.ctx.Done():
+				return
+			default:
+			}
+			
 			h.editsMutex.Lock()
 			for id, timestamp := range h.recentEdits {
 				if time.Since(timestamp) > 30*time.Second {
@@ -135,6 +201,46 @@ func (h *PlusHandler) HandleDelete(s *discordgo.Session, m *discordgo.MessageDel
 	if err != nil {
 		log.Printf("PlusHandler: Error parsing IDs for deletion: %v", err)
 		return
+	}
+
+	// 防止重复处理消息删除事件（检查是否在最近3秒内已处理过）
+	h.deletionsMutex.RLock()
+	if lastDel, exists := h.recentDeletions[messageID]; exists && time.Since(lastDel) < 3*time.Second {
+		h.deletionsMutex.RUnlock()
+		log.Printf("PlusHandler: 跳过重复的消息删除事件 - 消息ID: %d", messageID)
+		return
+	}
+	h.deletionsMutex.RUnlock()
+
+	// 记录这次删除处理
+	h.deletionsMutex.Lock()
+	h.recentDeletions[messageID] = time.Now()
+	h.deletionsMutex.Unlock()
+
+	// 定期清理旧的删除记录（每60秒清理一次）
+	h.delCleanupMutex.Lock()
+	if time.Since(h.lastDelCleanup) > 60*time.Second {
+		go func() {
+			defer h.delCleanupMutex.Unlock()
+			
+			// 检查context是否已取消
+			select {
+			case <-h.ctx.Done():
+				return
+			default:
+			}
+			
+			h.deletionsMutex.Lock()
+			for id, timestamp := range h.recentDeletions {
+				if time.Since(timestamp) > 30*time.Second {
+					delete(h.recentDeletions, id)
+				}
+			}
+			h.deletionsMutex.Unlock()
+			h.lastDelCleanup = time.Now()
+		}()
+	} else {
+		h.delCleanupMutex.Unlock()
 	}
 
 	deletion := models.MessageDeletion{
@@ -190,7 +296,11 @@ func (h *PlusHandler) getOriginalMessageContent(s *discordgo.Session, messageID 
 	return "", ""
 }
 
-// Close closes the database connection.
+// Close closes the database connection and cancels all running goroutines.
 func (h *PlusHandler) Close() error {
+	// 取消所有正在运行的goroutine
+	h.cancel()
+	
+	// 关闭数据库连接
 	return h.db.Close()
 }

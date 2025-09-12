@@ -33,6 +33,15 @@ func NewBot() (*Bot, error) {
 		return nil, fmt.Errorf("error creating Discord session: %w", err)
 	}
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessageReactions | discordgo.IntentsGuildScheduledEvents
+	
+	// 限制State缓存大小以防止内存泄露
+	dg.State.MaxMessageCount = 0        // 不缓存消息
+	dg.State.TrackChannels = false      // 不跟踪频道状态
+	dg.State.TrackEmojis = false        // 不跟踪表情
+	dg.State.TrackMembers = false       // 不跟踪成员状态
+	dg.State.TrackRoles = false         // 不跟踪角色
+	dg.State.TrackVoice = false         // 不跟踪语音状态
+	dg.State.TrackPresences = false     // 不跟踪在线状态
 
 	// Initialize the logger
 	utils.InitLogger(dg)
