@@ -29,7 +29,8 @@ message Post {
 
 message GetPostRequest {
   string id = 1; // 要获取的帖子的 ID
-  optional string channel_id = 2; // (可选) 帖子所在的频道 ID，用于校验和路由
+  string guild_id = 2; // 帖子所在的服务器 ID
+  string channel_id = 3; // 必选帖子所在的频道 ID，用于校验和路由
 }
 
 message QueryPostsRequest {

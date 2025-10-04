@@ -4,6 +4,7 @@ import (
 	"log"
 	"math/rand"
 
+	"discord-bot/database"
 	"discord-bot/models"
 	"discord-bot/scanner"
 
@@ -60,7 +61,14 @@ func startScheduler(s *discordgo.Session) {
 		log.Fatalf("Could not set up cron job: %v", err)
 	}
 
-	// Daily member stats update has been removed.
+	// Daily cleanup of old posts
+	_, err = c.AddFunc("0 3 * * *", func() {
+		log.Println("Running daily cleanup of old posts...")
+		database.CleanupOldPosts()
+	})
+	if err != nil {
+		log.Fatalf("Could not set up daily cleanup cron job: %v", err)
+	}
 
 	c.Start()
 	log.Println("Cron jobs scheduled.")

@@ -9,6 +9,7 @@ import (
 
 	"discord-bot/command"
 	"discord-bot/config"
+	"discord-bot/grpc/client"
 	"discord-bot/utils"
 
 	"github.com/bwmarrin/discordgo"
@@ -17,7 +18,8 @@ import (
 
 // Bot encapsulates the bot's state.
 type Bot struct {
-	Session *discordgo.Session
+	Session      *discordgo.Session
+	GrpcClient   *client.RegistryClient
 }
 
 // NewBot creates and initializes a new Bot instance.
@@ -46,8 +48,22 @@ func NewBot() (*Bot, error) {
 	// Initialize the logger
 	utils.InitLogger(dg)
 
+	// Initialize gRPC client
+	grpcAddr := viper.GetString("GRPC_SERVER_ADDRESS")
+	grpcToken := viper.GetString("GRPC_TOKEN")
+	grpcName := viper.GetString("GRPC_CLIENT_NAME")
+
+	var grpcClient *client.RegistryClient
+	if grpcAddr != "" && grpcToken != "" && grpcName != "" {
+		grpcClient = client.NewRegistryClient(grpcAddr, grpcToken, grpcName)
+		log.Printf("gRPC 客户端已初始化: %s", grpcName)
+	} else {
+		log.Printf("gRPC 配置未完整，跳过 gRPC 客户端初始化")
+	}
+
 	return &Bot{
-		Session: dg,
+		Session:    dg,
+		GrpcClient: grpcClient,
 	}, nil
 }
 
@@ -121,6 +137,15 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 
 	startScheduler(b.Session)
 
+	// Start gRPC client connection
+	if b.GrpcClient != nil {
+		if err := b.GrpcClient.Connect(); err != nil {
+			log.Printf("警告: gRPC 客户端连接失败: %v", err)
+		} else {
+			log.Printf("gRPC 客户端已成功连接到网关")
+		}
+	}
+
 	log.Printf("Bot is now running. Press CTRL-C to exit.")
 	utils.Info("Bot", "Startup", "Bot has started successfully.")
 	return nil
@@ -129,6 +154,14 @@ func (b *Bot) Start(registerHandlers func(*Bot)) error {
 // Stop gracefully closes the bot's session.
 func (b *Bot) Stop() {
 	stopScheduler()
+
+	// Close gRPC client connection
+	if b.GrpcClient != nil {
+		if err := b.GrpcClient.Close(); err != nil {
+			log.Printf("gRPC 客户端关闭错误: %v", err)
+		}
+	}
+
 	if b.Session != nil {
 		b.Session.Close()
 	}
