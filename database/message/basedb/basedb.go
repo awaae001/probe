@@ -25,10 +25,49 @@ func NewBaseDB(config models.BaseGuildConfig) (*BaseDB, error) {
 		return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
 	}
 
+	// Check if database file exists and verify its integrity.
+	dbExists := false
+	if _, err := os.Stat(config.DBPath); err == nil {
+		dbExists = true
+	}
+
 	// Open the SQLite database file. It will be created if it doesn't exist.
 	db, err := sql.Open("sqlite3", config.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %s: %w", config.DBPath, err)
+	}
+
+	// If database exists, check its integrity.
+	if dbExists {
+		var integrityResult string
+		err := db.QueryRow("PRAGMA integrity_check;").Scan(&integrityResult)
+		if err != nil || integrityResult != "ok" {
+			log.Printf("Database corruption detected at %s (result: %s). Backing up and recreating...", config.DBPath, integrityResult)
+			db.Close()
+
+			// Backup the corrupted database.
+			backupPath := config.DBPath + ".corrupted." + fmt.Sprintf("%d", os.Getpid())
+			if renameErr := os.Rename(config.DBPath, backupPath); renameErr != nil {
+				log.Printf("Warning: failed to backup corrupted database: %v", renameErr)
+				// Try to remove the corrupted file if backup fails.
+				if removeErr := os.Remove(config.DBPath); removeErr != nil {
+					return nil, fmt.Errorf("failed to remove corrupted database: %w", removeErr)
+				}
+			} else {
+				log.Printf("Corrupted database backed up to %s", backupPath)
+			}
+
+			// Reopen with a fresh database.
+			db, err = sql.Open("sqlite3", config.DBPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to reopen database at %s: %w", config.DBPath, err)
+			}
+		}
+	}
+
+	// Enable WAL mode for better concurrency and reduced corruption risk.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		log.Printf("Warning: failed to enable WAL mode: %v", err)
 	}
 
 	// Create the messages table if it doesn't exist.
